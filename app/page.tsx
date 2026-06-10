@@ -111,7 +111,11 @@ export default function CustomerDashboardHubPage() {
             <div className="grid grid-cols-1 gap-2.5 text-left">
               {/* 1. OOS Reports (War Room ลิงก์ Dynamic) */}
               <div
-                onClick={() => router.push("/oos-warroom")}
+                onClick={() => {
+                  // ส่ง tag ไปด้วย เพื่อให้หน้าปลายทางรับค่าได้
+                  const tag = companyTag.toLowerCase();
+                  router.push(`/executive/${tag}?tag=${tag}`);
+                }}
                 className="bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-4 shadow-xs transition-all cursor-pointer flex items-center justify-between group"
               >
                 <div className="flex items-center space-x-3.5">
@@ -132,7 +136,10 @@ export default function CustomerDashboardHubPage() {
 
               {/* 2. Market Intelligence */}
               <div
-                onClick={() => router.push("/market-intel")}
+                onClick={() => {
+                  const tag = companyTag.toLowerCase();
+                  router.push(`/market-intel?tag=${tag}`);
+                }}
                 className="bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-4 shadow-xs transition-all cursor-pointer flex items-center justify-between group"
               >
                 <div className="flex items-center space-x-3.5">
