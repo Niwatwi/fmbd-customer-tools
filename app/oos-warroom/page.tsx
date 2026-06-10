@@ -8,20 +8,13 @@ export default function OosWarroomRedirectPage() {
 
   useEffect(() => {
     // 🔍 หยิบสิทธิ์บริษัทของลูกค้าที่ล็อกอินสำเร็จออกมา
-    const rawTag = localStorage.getItem("customer_company_tag");
-
-    if (!rawTag) {
-        // หากไม่มีข้อมูล ให้ดีดกลับไปหน้า Login หรือหน้าหลักแทน
-        router.push("/login");
-        return;
-    }
-    const companySlug = rawTag.trim().toLowerCase();
-
-    // 🔗 URL ปลายทางโครงสร้างหลักของพี่นิวาส
-    const targetUrl = `https://riverpro-oos-warroom.vercel.app/executive/${companySlug}?openExternalBrowser=1`;
-
-    // 🚀 สั่งถีบเปิดหน้าจอแสดงผลรายงานทันที พร้อมกระโดดข้ามหน้าประวัติกลับมาที่ Hub หลัก
-    window.location.href = targetUrl;
+    // ... ในโดเมนต้นทาง (Hub)
+  const rawTag = localStorage.getItem("customer_company_tag") || "rvp";
+  const companySlug = rawTag.trim().toLowerCase();
+  
+  // แนบ tag ไปกับ query parameter เพื่อให้ปลายทางอ่านค่าได้ทันที
+  const targetUrl = `https://riverpro-oos-warroom.vercel.app/executive/${companySlug}?tag=${companySlug}&openExternalBrowser=1`;
+  window.location.href = targetUrl;
   }, [router]);
 
   return (
