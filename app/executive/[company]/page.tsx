@@ -654,7 +654,7 @@ export default function CompanyExecutiveDashboard() {
             onClick={() => {
               // เปลี่ยน URL นี้ให้เป็น URL ของ fmbd-customer-tools
               window.location.href =
-                "https://fmbd-customer-tools-43ule0ocs-niwat-wis-projects.vercel.app/login?openExternalBrowser=1";
+                "https://fmbd-customer-tools-gp3jcnf1s-niwat-wis-projects.vercel.app?openExternalBrowser=1";
             }}
             className="bg-slate-800 text-slate-100 px-3 py-1.5 rounded text-xs hover:bg-slate-700 transition-all flex items-center gap-1.5 font-bold cursor-pointer border border-slate-700"
           >
