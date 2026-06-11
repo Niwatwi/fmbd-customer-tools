@@ -90,7 +90,7 @@ export default function CustomerLoginPage() {
       } else if (derivedRole === "auditor") {
         window.location.href = "/auditor";
       } else {
-        window.location.href = "/";
+        window.location.href = "https://fmbd-customer-tools.vercel.app";
       }
     } catch (err) {
       console.error("Login Error:", err);
@@ -122,7 +122,7 @@ export default function CustomerLoginPage() {
       showConfirmButton: false,
     }).then(() => {
       if (role === "customer") {
-        window.location.href = "/";
+        window.location.href = "https://fmbd-customer-tools.vercel.app";
       } else {
         window.location.href = `/${role}`;
       }
