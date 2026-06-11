@@ -156,6 +156,30 @@ export default function CustomerDashboardHubPage() {
               </div>
               <i className="fa-solid fa-chevron-right text-[9px] text-slate-300 group-hover:translate-x-0.5 transition-all"></i>
             </div>
+            {/* 🛡️ ปุ่มใหม่: Auditor War Room (ชี้ไปยัง URL โปรเจกต์ fmbd-tools) */}
+            <div
+              onClick={() => {
+                // ใช้ URL ที่พี่เพิ่งได้มา แล้วบวก /auditor ต่อท้ายครับ
+                window.location.href =
+                  "https://riverpro-oos-warroom-dwx4.vercel.app/auditor";
+              }}
+              className="bg-white border border-slate-200 hover:border-blue-500 rounded-xl p-4 shadow-xs transition-all cursor-pointer flex items-center justify-between group"
+            >
+              <div className="flex items-center space-x-3.5">
+                <div className="w-9 h-9 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-xs group-hover:scale-105 transition-all">
+                  <i className="fa-solid fa-shield-halved text-xs"></i>
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-slate-800">
+                    Auditor War Room
+                  </h4>
+                  <p className="text-slate-400 text-[10px] font-semibold leading-tight pt-0.5">
+                    ระบบตรวจสอบงานออดิเตอร์ และจัดการเคสร้องเรียน
+                  </p>
+                </div>
+              </div>
+              <i className="fa-solid fa-chevron-right text-[9px] text-slate-300 group-hover:translate-x-0.5 transition-all"></i>
+            </div>
           </div>
         </main>
       </div>
