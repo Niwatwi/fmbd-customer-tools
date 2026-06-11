@@ -8,13 +8,17 @@ export default function OosWarroomRedirectPage() {
 
   useEffect(() => {
     // 🔍 หยิบสิทธิ์บริษัทของลูกค้าที่ล็อกอินสำเร็จออกมา
-    const rawTag = localStorage.getItem("customer_company_tag") || "RVP";
+    const rawTag = localStorage.getItem("customer_company_tag");
 
-    // 🛠️ แปลงค่าให้อยู่ในรูปตัวพิมพ์เล็ก (rvp, loxley, kewpie) เพื่อแมปเข้า Slug ของ Vercel
+    if (!rawTag) {
+      // หากไม่มีข้อมูล ให้ดีดกลับไปหน้า Login หรือหน้าหลักแทน
+      router.push("/login");
+      return;
+    }
     const companySlug = rawTag.trim().toLowerCase();
 
     // 🔗 URL ปลายทางโครงสร้างหลักของพี่นิวาส
-    const targetUrl = `https://riverpro-oos-warroom-3bi7-ospdu9m54-niwat-wis-projects.vercel.app/executive/${companySlug}?openExternalBrowser=1`;
+    const targetUrl = `https://riverpro-oos-warroom.vercel.app/executive/${companySlug}?openExternalBrowser=1`;
 
     // 🚀 สั่งถีบเปิดหน้าจอแสดงผลรายงานทันที พร้อมกระโดดข้ามหน้าประวัติกลับมาที่ Hub หลัก
     window.location.href = targetUrl;
