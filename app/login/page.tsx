@@ -85,12 +85,16 @@ export default function CustomerLoginPage() {
       });
 
       // 🚀 3. จัดการกระจายส่งตัวไปหน้าควบคุมงานตามระดับสิทธิ์จริงผ่านระเบียบ Routing (บังคับล้างแคช)
+      // 🚀 3. จัดการกระจายส่งตัวตามระดับสิทธิ์ (ถ้าเป็นพนักงานให้ดีดข้ามค่ายไป fmbd-tools)
       if (derivedRole === "admin") {
         window.location.href = "/admin";
       } else if (derivedRole === "auditor") {
-        window.location.href = "/auditor";
+        // 🎯 ดีดส่งตัวพนักงานภาคสนามข้ามค่ายไปหาโดเมนหลักของฝั่ง fmbd-tools ทันทีครับพี่นิวาส!
+        window.location.href =
+          "https://fmbd-tools-niwat-wis-projects.vercel.app";
+        // (หรือเปลี่ยนเป็น URL โดเมนหลักสั้นๆ ของโปรเจกต์ fmbd-tools ได้เลยครับ)
       } else {
-        window.location.href = "https://fmbd-customer-tools.vercel.app";
+        window.location.href = "/"; // ลูกค้าเข้าหน้า Hub หลักตามปกติ
       }
     } catch (err) {
       console.error("Login Error:", err);
