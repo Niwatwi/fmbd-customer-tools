@@ -175,10 +175,11 @@ export default function CompanyExecutiveDashboard() {
     const storedName = localStorage.getItem("customer_display_name");
 
     if (!storedUser || !storedName) {
-      // 🟢 เคลียร์ระเบิดป๊อปอัปออก แล้วสั่งดีดข้ามค่ายแบบไร้รอยต่อ (Silent Redirect) ทันทีครับพี่นิวาส
-      // ผู้ใช้งานจะไม่รู้สึกสะดุด และระบบจะวิ่งสลับหน้าเข้าหา fmbd-customer-tools ได้อย่างเป็นเนื้อเดียวกันครับ
+      // 🟢 แก้ใหม่ให้วิ่งกลับมาหน้าล็อกอินของโดเมนหลักถาวรเลยครับพี่นิวาส
+      localStorage.clear();
+      sessionStorage.clear();
       window.location.href =
-        "https://fmbd-customer-tools-egqddg3cl-niwat-wis-projects.vercel.app/login?openExternalBrowser=1";
+        "https://fmbd-customer-tools.vercel.app/login?openExternalBrowser=1";
       return; // หยุดการทำงานทันที
     }
   }, [router]);
