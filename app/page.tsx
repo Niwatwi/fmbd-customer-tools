@@ -156,12 +156,11 @@ export default function CustomerDashboardHubPage() {
               </div>
               <i className="fa-solid fa-chevron-right text-[9px] text-slate-300 group-hover:translate-x-0.5 transition-all"></i>
             </div>
-            {/* 🛡️ ปุ่มใหม่: Auditor War Room (ชี้ไปยัง URL โปรเจกต์ fmbd-tools) */}
+            {/* 🛡️ ปุ่มใหม่: Auditor War Room (ส่ง Token ไปให้บ้าน Auditor ด้วย) */}
             <div
               onClick={() => {
-                // ใช้ URL ที่พี่เพิ่งได้มา แล้วบวก /auditor ต่อท้ายครับ
-                window.location.href =
-                  "https://riverpro-oos-warroom-dwx4.vercel.app/auditor";
+                const token = localStorage.getItem("customer_username") || "";
+                window.location.href = `https://riverpro-oos-warroom-dwx4.vercel.app/auditor?token=${token}`;
               }}
               className="bg-white border border-slate-200 hover:border-blue-500 rounded-xl p-4 shadow-xs transition-all cursor-pointer flex items-center justify-between group"
             >
