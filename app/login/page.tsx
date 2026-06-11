@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import React, { useState, startTransition } from "react";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import Swal from "sweetalert2";
@@ -70,7 +70,7 @@ export default function CustomerLoginPage() {
       );
       localStorage.setItem("customer_company_tag", tag || "RVP");
 
-      // เก็บลง sessionStorage สวมรอยรองรับระบบ War Room ตัวเก่าของพี่ด้วยครับ
+      // เก็บลง sessionStorage รองรับระบบ War Room ตัวเก่าด้วยครับ
       sessionStorage.setItem("user_role", derivedRole);
       sessionStorage.setItem("user_display_name", profile.display_name || "");
       sessionStorage.setItem("user_company", tag.toLowerCase());
@@ -84,14 +84,13 @@ export default function CustomerLoginPage() {
         showConfirmButton: false,
       });
 
-      // 🚀 3. จัดการกระจายส่งตัวไปหน้าควบคุมงานตามระดับสิทธิ์จริงผ่านระเบียบ Routing
+      // 🚀 3. จัดการกระจายส่งตัวไปหน้าควบคุมงานตามระดับสิทธิ์จริงผ่านระเบียบ Routing (บังคับล้างแคช)
       if (derivedRole === "admin") {
-        router.push("/admin");
+        window.location.href = "/admin";
       } else if (derivedRole === "auditor") {
-        router.push("/auditor");
+        window.location.href = "/auditor";
       } else {
-        // 🎯 สิทธิ์ฝั่งลูกค้าพรีเมียม วิ่งตรงเข้าสู่แผงหน้าจอหลักศูนย์ควบคุมกลางทันทีครับ!
-        router.push("/");
+        window.location.href = "/";
       }
     } catch (err) {
       console.error("Login Error:", err);
@@ -122,8 +121,11 @@ export default function CustomerLoginPage() {
       timer: 1000,
       showConfirmButton: false,
     }).then(() => {
-      if (role === "customer") router.push("/");
-      else router.push(`/${role}`);
+      if (role === "customer") {
+        window.location.href = "/";
+      } else {
+        window.location.href = `/${role}`;
+      }
     });
   };
 
