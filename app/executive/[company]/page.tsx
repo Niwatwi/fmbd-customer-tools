@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import Swal from "sweetalert2";
 import {
   RefreshCcw,
@@ -23,6 +22,8 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import dynamic from "next/dynamic";
+// 🟢 ดึง supabase จากไลบรารีของระบบ
+import { supabase } from "../../../lib/supabase";
 
 const ResponsiveContainer = dynamic(
   () => import("recharts").then((m) => m.ResponsiveContainer),
@@ -44,17 +45,14 @@ import {
   Legend,
 } from "recharts";
 
-const supabase = createClient(
-  "https://ryqabfpzjmtujfhslovm.supabase.co",
-  "sb_publishable_RhkCtuGUUeaG9ScGoyS1vw_zCCDumnl",
-);
-
 interface DashboardItem {
   id: string;
   visit_id: string;
   barcode: string;
   category: string;
+  sub_category?: string;
   brand: string;
+  sub_brand?: string;
   oos_reason: string;
   product_image_url: string | null;
   company: string;
@@ -151,6 +149,8 @@ export default function CompanyExecutiveDashboard() {
 
   const [filters, setFilters] = useState({
     date: "",
+    month: "",
+    year: "",
     area: "",
     account: "",
     province: "",
@@ -158,7 +158,9 @@ export default function CompanyExecutiveDashboard() {
     status: "",
     barcode: "",
     brand: "",
+    sub_brand: "",
     category: "",
+    sub_category: "",
   });
 
   const [customerComments, setCustomerComments] = useState<
@@ -169,28 +171,24 @@ export default function CompanyExecutiveDashboard() {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [commentRefreshTrigger, setCommentRefreshTrigger] = useState(0);
 
-  // ระบบจะเช็คตั๋วเซสชันพอร์ทัลกลางทันที
+  // ระบบตรวจเช็คเซสชันล็อกอิน
   useEffect(() => {
     const storedUser = localStorage.getItem("customer_username");
     const storedName = localStorage.getItem("customer_display_name");
 
     if (!storedUser || !storedName) {
-      // 🟢 แก้ใหม่ให้วิ่งกลับมาหน้าล็อกอินของโดเมนหลักถาวรเลยครับพี่นิวาส
       localStorage.clear();
       sessionStorage.clear();
-      window.location.href =
-        "https://fmbd-customer-tools.vercel.app/login?openExternalBrowser=1";
-      return; // หยุดการทำงานทันที
+      router.replace("/login");
+      return;
     }
   }, [router]);
 
-  // 1. แยก Effect สำหรับจัดการเรื่อง Client-side Render
   useEffect(() => {
     const raf = requestAnimationFrame(() => setIsMounted(true));
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // 2. แยก Effect สำหรับจัดการเรื่องเวลา (Clock)
   useEffect(() => {
     const updateTime = () => {
       setCurrentTime(
@@ -210,7 +208,6 @@ export default function CompanyExecutiveDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // 1. โหลดข้อมูลภาพรวมด่วนจาก View สำหรับทำชาร์ตสถิติ
   useEffect(() => {
     let active = true;
     async function fetchChartAndDropdownMeta() {
@@ -230,97 +227,83 @@ export default function CompanyExecutiveDashboard() {
     };
   }, [config.dbCompany, refreshTrigger]);
 
-  // 2. โหลดข้อมูลลงตารางหลักแบบแบ่งหน้า
-  useEffect(() => {
-    let active = true;
-    async function fetchPaginatedTableRecords() {
-      setLoading(true);
-      let query = supabase
-        .from("vw_executive_warroom")
-        .select("*", { count: "exact" })
-        .eq("company", config.dbCompany)
-        .in("oos_reason", TARGET_REASONS);
-
-      if (filters.barcode) query = query.eq("barcode", filters.barcode);
-      if (filters.brand) query = query.eq("brand", filters.brand);
-      if (filters.category) query = query.eq("category", filters.category);
-      if (filters.reason) query = query.eq("oos_reason", filters.reason);
-      if (filters.date) query = query.eq("date_key", filters.date);
-      if (filters.area) query = query.eq("area", filters.area);
-      if (filters.account) query = query.eq("account", filters.account);
-      if (filters.province) query = query.eq("province", filters.province);
-
-      if (filters.status === "resolved")
-        query = query.not("action_plan", "is", null);
-      if (filters.status === "pending") query = query.is("action_plan", null);
-
-      // 🟢 เปลี่ยนจาก debouncedSearch เป็น globalSearch ครับ
-      if (globalSearch) {
-        query = query.or(
-          `store_name.ilike.%${globalSearch}%,barcode.ilike.%${globalSearch}%,brand.ilike.%${globalSearch}%,descriptions.ilike.%${globalSearch}%`,
-        );
-      }
-
-      const fromRow = (currentPage - 1) * itemsPerPage;
-      const textRow = fromRow + itemsPerPage - 1;
-
-      const {
-        data: reports,
-        count,
-        error,
-      } = await query.range(fromRow, textRow).order("id", { ascending: false });
-
-      if (active) {
-        if (!error && reports) {
-          setData(reports as DashboardItem[]);
-          setTotalCount(count || 0);
-        } else if (error) {
-          console.error("Fetch Table Error:", error);
-        }
-        setLoading(false);
-      }
-    }
-    fetchPaginatedTableRecords();
-    return () => {
-      active = false;
-    };
-    // 🟢 อย่าลืมเปลี่ยนใน dependency array ด้านล่างนี้ด้วยนะครับ
-  }, [config.dbCompany, currentPage, globalSearch, refreshTrigger, filters]);
-
-  // 3. รายการเมนู Dropdown
   const dropdownOptions = useMemo(() => {
     const dates = new Set<string>();
+    const months = new Set<string>();
+    const years = new Set<string>();
     const areas = new Set<string>();
     const accounts = new Set<string>();
     const provinces = new Set<string>();
     const reasons = new Set<string>();
     const barcodes = new Set<string>();
     const brands = new Set<string>();
+    const subBrands = new Set<string>();
     const categories = new Set<string>();
+    const subCategories = new Set<string>();
 
     chartDataSrc.forEach((item) => {
       if (!item) return;
-      if (item.date_key) dates.add(item.date_key);
+      if (item.date_key) {
+        dates.add(item.date_key);
+        const parts = item.date_key.split("-");
+        if (parts[0]) years.add(parts[0]);
+        if (parts[1]) months.add(parts[1]);
+      }
       if (item.area) areas.add(item.area);
       if (item.account) accounts.add(item.account);
       if (item.province) provinces.add(item.province);
       if (item.oos_reason) reasons.add(item.oos_reason);
       if (item.barcode) barcodes.add(item.barcode);
       if (item.brand) brands.add(item.brand);
-      if (item.category) categories.add(item.category);
+
+      const matchBrand = !filters.brand || item.brand === filters.brand;
+      if (matchBrand) {
+        if (item.sub_brand) subBrands.add(item.sub_brand);
+        if (item.category) categories.add(item.category);
+        if (item.sub_category) subCategories.add(item.sub_category);
+      }
     });
 
     return {
       dates: Array.from(dates).sort().reverse(),
+      months: Array.from(months).sort(),
+      years: Array.from(years).sort().reverse(),
       areas: Array.from(areas).sort(),
       accounts: Array.from(accounts).sort(),
       provinces: Array.from(provinces).sort(),
       reasons: Array.from(reasons).sort(),
       barcodes: Array.from(barcodes).sort(),
       brands: Array.from(brands).sort(),
+      subBrands: Array.from(subBrands).sort(),
       categories: Array.from(categories).sort(),
+      subCategories: Array.from(subCategories).sort(),
     };
-  }, [chartDataSrc]);
+  }, [chartDataSrc, filters.brand]);
+
+  // แก้ไข useEffect ส่วน fetchPaginatedTableRecords ให้เหลือแค่ตัวแปรนี้ครับ
+  useEffect(() => {
+    let active = true;
+    async function fetchAllRecords() {
+      setLoading(true);
+      const { data: reports, error } = await supabase
+        .from("vw_executive_warroom")
+        .select("*") // ดึงมาทั้งหมดเลย ไม่ต้องส่ง Query Filter
+        .eq("company", config.dbCompany)
+        .in("oos_reason", TARGET_REASONS);
+
+      if (active) {
+        if (!error && reports) {
+          setChartDataSrc(reports as DashboardItem[]); // เก็บไว้ในตัวแปรหลัก
+          setData(reports as DashboardItem[]); // เก็บลงตารางด้วย
+        }
+        setLoading(false);
+      }
+    }
+    fetchAllRecords();
+    return () => {
+      active = false;
+    };
+  }, [config.dbCompany, refreshTrigger]); // 🟢 เอา filters ออกจากตรงนี้ครับ
 
   const uniqueCompanyStores = useMemo(() => {
     const stores = new Set<string>();
@@ -408,6 +391,16 @@ export default function CompanyExecutiveDashboard() {
   const filteredChartData = useMemo(() => {
     return chartDataSrc.filter((item) => {
       if (filters.date && item.date_key !== filters.date) return false;
+
+      if (filters.year && !item.date_key?.startsWith(`${filters.year}-`))
+        return false;
+      if (filters.month && !item.date_key?.includes(`-${filters.month}-`))
+        return false;
+      if (filters.sub_brand && item.sub_brand !== filters.sub_brand)
+        return false;
+      if (filters.sub_category && item.sub_category !== filters.sub_category)
+        return false;
+
       if (filters.area && item.area !== filters.area) return false;
       if (filters.account && item.account !== filters.account) return false;
       if (filters.province && item.province !== filters.province) return false;
@@ -418,7 +411,6 @@ export default function CompanyExecutiveDashboard() {
       if (filters.status === "resolved" && !item.action_plan) return false;
       if (filters.status === "pending" && item.action_plan) return false;
 
-      // Use globalSearch here
       if (globalSearch) {
         const search = globalSearch.toLowerCase();
         return (
@@ -431,12 +423,26 @@ export default function CompanyExecutiveDashboard() {
       }
       return true;
     });
-  }, [chartDataSrc, filters, globalSearch]); // Updated dependency array
+  }, [chartDataSrc, filters, globalSearch]);
 
+  // 🟢 คำนวณยอด OOS, Total Visits และ % ให้อัตโนมัติเมื่อมีการเปลี่ยนฟิลเตอร์
   const metrics = useMemo(() => {
     const totalOOSCount = filteredChartData.length;
-    const accountCounts: Record<string, number> = {};
 
+    // คำนวณหาจำนวนครั้งที่เข้าเยี่ยมจาก visit_id ที่ไม่ซ้ำกัน (ตามข้อมูลที่โดน Filter แล้ว)
+    const uniqueVisits = new Set<string>();
+    filteredChartData.forEach((item) => {
+      if (item.visit_id) uniqueVisits.add(item.visit_id);
+    });
+    const totalVisits = uniqueVisits.size;
+
+    // คำนวณ % OOS
+    const oosPercentage =
+      totalVisits > 0
+        ? ((totalOOSCount / totalVisits) * 100).toFixed(2)
+        : "0.00";
+
+    const accountCounts: Record<string, number> = {};
     filteredChartData.forEach((item) => {
       if (item.account)
         accountCounts[item.account] = (accountCounts[item.account] || 0) + 1;
@@ -468,6 +474,8 @@ export default function CompanyExecutiveDashboard() {
 
     return {
       totalOOSCount,
+      totalVisits,
+      oosPercentage,
       maxAccount: totalOOSCount > 0 ? `${maxAccount} (${maxCount})` : "-",
       minAccount: totalOOSCount > 0 ? `${minAccount} (${minCount})` : "-",
       pendingCount,
@@ -541,7 +549,7 @@ export default function CompanyExecutiveDashboard() {
   const handleExportExcel = () => {
     try {
       let csvContent =
-        "\uFEFFDate,Area,Province,Account,Store Code,Store Name,Barcode,Description,Brand,Category,OOS Reason,Status,Executive Directive\n";
+        "\uFEFFDate,Area,Province,Account,Store Code,Store Name,Barcode,Description,Brand,Sub Brand,Category,Sub Category,OOS Reason,Status,Executive Directive\n";
       data.forEach((item) => {
         const row = [
           item.date_key || "",
@@ -553,7 +561,9 @@ export default function CompanyExecutiveDashboard() {
           item.barcode || "",
           item.descriptions || "",
           item.brand || "",
+          item.sub_brand || "",
           item.category || "",
+          item.sub_category || "",
           item.oos_reason || "",
           item.action_plan ? "Verified" : "Pending",
           item.action_plan || "",
@@ -579,7 +589,6 @@ export default function CompanyExecutiveDashboard() {
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased pb-12">
       <header className="sticky top-0 z-50 bg-[#1e3a8a] text-white p-4 shadow-md flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
         <div className="flex items-center gap-3">
-          {/* 🛠️ บล็อกแก้ไข 1: เคลียร์ Properties กว้างยาวที่เบิ้ลซ้ำซ้อนออก เหลือชุดเดียวเรียบร้อยครับพี่นิวัต */}
           <div className="relative w-9 h-9 bg-white rounded p-0.5 flex items-center justify-center overflow-hidden shrink-0">
             <Image
               src={config.logo}
@@ -649,12 +658,9 @@ export default function CompanyExecutiveDashboard() {
           >
             แชร์ LINE
           </button>
-          {/* ปุ่มปรับปรุง: ดีดออกจากแอป Warroom ไปหน้า Hub หลัก */}
           <button
             onClick={() => {
-              // เปลี่ยน URL นี้ให้เป็น URL ของ fmbd-customer-tools
-              window.location.href =
-                "https://fmbd-customer-tools-gp3jcnf1s-niwat-wis-projects.vercel.app?openExternalBrowser=1";
+              router.push("/");
             }}
             className="bg-slate-800 text-slate-100 px-3 py-1.5 rounded text-xs hover:bg-slate-700 transition-all flex items-center gap-1.5 font-bold cursor-pointer border border-slate-700"
           >
@@ -663,8 +669,10 @@ export default function CompanyExecutiveDashboard() {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-4">
-        <div className="bg-linear-to-br from-rose-500 to-rose-600 text-white p-4 rounded-xl shadow-md border border-rose-400">
+      {/* 🟢 บล็อกตัวเลขสถิติด้านบน (อัปเดตเป็น 5 กล่อง) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 p-4">
+        {/* กล่องที่ 1: OOS รวม (แก้พื้นหลังเรียบร้อย) */}
+        <div className="bg-gradient-to-br from-rose-500 to-rose-600 text-white p-4 rounded-xl shadow-md border border-rose-400">
           <div className="flex justify-between items-start">
             <p className="text-xs font-bold tracking-wide uppercase opacity-90">
               OOS รวม (4 เหตุผลหลัก)
@@ -672,10 +680,26 @@ export default function CompanyExecutiveDashboard() {
             <AlertCircle size={18} className="opacity-80" />
           </div>
           <h3 className="text-2xl font-black mt-2 font-mono">
-            {metrics.totalOOSCount}{" "}
+            {metrics.totalOOSCount?.toLocaleString() || 0}{" "}
             <span className="text-xs font-normal">SKUs</span>
           </h3>
         </div>
+
+        {/* 🟢 กล่องที่ 2: ยอดการเข้าเยี่ยมร้านค้า (กล่องใหม่) */}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
+            ยอดเข้าเยี่ยมร้านค้า
+          </p>
+          <h3 className="text-2xl font-black mt-1 text-slate-800">
+            {metrics.totalVisits.toLocaleString()}{" "}
+            <span className="text-xs font-normal text-gray-500">ครั้ง</span>
+          </h3>
+          <div className="text-xs text-blue-600 font-bold mt-1">
+            คิดเป็น OOS: {metrics.oosPercentage}%
+          </div>
+        </div>
+
+        {/* กล่องที่ 3: Account มากที่สุด */}
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
           <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
             Account OOS มากที่สุด
@@ -685,6 +709,8 @@ export default function CompanyExecutiveDashboard() {
           </h3>
           <div className="h-1 bg-rose-500 rounded-full mt-3 w-full"></div>
         </div>
+
+        {/* กล่องที่ 4: Account น้อยที่สุด */}
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
           <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
             Account OOS น้อยที่สุด
@@ -694,6 +720,8 @@ export default function CompanyExecutiveDashboard() {
           </h3>
           <div className="h-1 bg-emerald-500 rounded-full mt-3 w-full"></div>
         </div>
+
+        {/* กล่องที่ 5: สถานะการสั่งการ */}
         <div className="bg-[#1e293b] text-slate-100 p-4 rounded-xl shadow-md border border-slate-700">
           <div className="flex justify-between text-[11px] font-bold border-b border-slate-700 pb-1.5">
             <span className="text-amber-400 flex items-center gap-1">
@@ -726,7 +754,8 @@ export default function CompanyExecutiveDashboard() {
         />
       </div>
 
-      <div className="bg-white p-4 mx-4 mt-3 rounded shadow-sm border border-gray-200 grid grid-cols-2 md:grid-cols-5 gap-3">
+      {/* แผงควบคุมฟิลเตอร์ */}
+      <div className="bg-white p-4 mx-4 mt-3 rounded shadow-sm border border-gray-200 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         <select
           className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
           value={filters.date}
@@ -742,6 +771,39 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
+        <select
+          className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
+          value={filters.year}
+          onChange={(e) => {
+            setCurrentPage(1);
+            setFilters({ ...filters, year: e.target.value });
+          }}
+        >
+          <option value="">Year (All)</option>
+          {dropdownOptions.years.map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
+          value={filters.month}
+          onChange={(e) => {
+            setCurrentPage(1);
+            setFilters({ ...filters, month: e.target.value });
+          }}
+        >
+          <option value="">Month (All)</option>
+          {dropdownOptions.months.map((m) => (
+            <option key={m} value={m}>
+              เดือน {m}
+            </option>
+          ))}
+        </select>
+
         <select
           className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
           value={filters.area}
@@ -757,6 +819,7 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
         <select
           className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
           value={filters.account}
@@ -772,6 +835,7 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
         <select
           className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
           value={filters.province}
@@ -787,6 +851,7 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
         <select
           className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
           value={filters.reason}
@@ -802,6 +867,7 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
         <select
           className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
           value={filters.barcode}
@@ -817,12 +883,19 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
         <select
-          className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
+          className="border border-blue-400 p-2 rounded text-xs font-bold outline-none bg-blue-50 text-blue-900"
           value={filters.brand}
           onChange={(e) => {
             setCurrentPage(1);
-            setFilters({ ...filters, brand: e.target.value });
+            setFilters({
+              ...filters,
+              brand: e.target.value,
+              sub_brand: "",
+              category: "",
+              sub_category: "",
+            });
           }}
         >
           <option value="">Brand (All)</option>
@@ -832,6 +905,24 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
+        <select
+          className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+          value={filters.sub_brand}
+          disabled={!filters.brand && dropdownOptions.subBrands.length === 0}
+          onChange={(e) => {
+            setCurrentPage(1);
+            setFilters({ ...filters, sub_brand: e.target.value });
+          }}
+        >
+          <option value="">Sub Brand (All)</option>
+          {dropdownOptions.subBrands.map((sb) => (
+            <option key={sb} value={sb}>
+              {sb}
+            </option>
+          ))}
+        </select>
+
         <select
           className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
           value={filters.category}
@@ -847,8 +938,25 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
         <select
-          className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50 md:col-span-2"
+          className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50"
+          value={filters.sub_category}
+          onChange={(e) => {
+            setCurrentPage(1);
+            setFilters({ ...filters, sub_category: e.target.value });
+          }}
+        >
+          <option value="">Sub Category (All)</option>
+          {dropdownOptions.subCategories.map((sc) => (
+            <option key={sc} value={sc}>
+              {sc}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="border border-gray-300 p-2 rounded text-xs outline-none bg-gray-50 md:col-span-2 lg:col-span-6"
           value={filters.status}
           onChange={(e) => {
             setCurrentPage(1);
@@ -861,6 +969,7 @@ export default function CompanyExecutiveDashboard() {
         </select>
       </div>
 
+      {/* บล็อกแสดงกราฟสถิติหน้าระบบ */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 p-4">
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 min-w-0 overflow-hidden">
           <h4 className="text-xs font-bold text-slate-700 mb-4">
@@ -896,6 +1005,7 @@ export default function CompanyExecutiveDashboard() {
             )}
           </div>
         </div>
+
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 min-w-0 overflow-hidden">
           <h4 className="text-xs font-bold text-slate-700 mb-4">
             📊 Top 5 Accounts OOS
@@ -935,6 +1045,7 @@ export default function CompanyExecutiveDashboard() {
             )}
           </div>
         </div>
+
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 min-w-0 overflow-hidden">
           <h4 className="text-xs font-bold text-slate-700 mb-4">
             ⏱ ปริมาณ OOS ราย Area (Donut)
@@ -977,7 +1088,6 @@ export default function CompanyExecutiveDashboard() {
       </div>
 
       <div className="px-4 pb-8">
-        {/* ศูนย์ประสานงานและร้องเรียนเร่งด่วน */}
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 grid grid-cols-1 lg:grid-cols-3 gap-5 text-left mb-4">
           <form
             onSubmit={handleSendComment}
@@ -1073,13 +1183,7 @@ export default function CompanyExecutiveDashboard() {
                         {comment.store_name}
                       </span>
                       <span
-                        className={`px-2 py-0.5 rounded text-[8px] font-black uppercase text-white whitespace-nowrap ${
-                          comment.status === "admin_intervened"
-                            ? "bg-teal-600"
-                            : comment.status === "auditor_replied"
-                              ? "bg-blue-600"
-                              : "bg-amber-500 animate-pulse"
-                        }`}
+                        className={`px-2 py-0.5 rounded text-[8px] font-black uppercase text-white whitespace-nowrap ${comment.status === "admin_intervened" ? "bg-teal-600" : comment.status === "auditor_replied" ? "bg-blue-600" : "bg-amber-500 animate-pulse"}`}
                       >
                         {comment.status === "admin_intervened"
                           ? "✅ แอดมินเคลียร์ปัญหาแล้ว"
@@ -1120,7 +1224,7 @@ export default function CompanyExecutiveDashboard() {
           </div>
         </div>
 
-        {/* ตารางงานหลัก */}
+        {/* ตารางงานหลักหน้าระบบ */}
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 overflow-x-auto mt-4">
           <table className="min-w-full text-left divide-y divide-slate-200">
             <thead className="bg-slate-100 text-[10px] uppercase tracking-widest text-slate-600">
@@ -1148,18 +1252,22 @@ export default function CompanyExecutiveDashboard() {
                     🔄 กำลังโหลดข้อมูล...
                   </td>
                 </tr>
-              ) : data.length === 0 ? (
+              ) : filteredChartData.length === 0 ? (
                 <tr>
                   <td
                     colSpan={11}
                     className="p-12 text-center text-slate-500 font-medium"
                   >
-                    ไม่พบข้อมูลรายงาน OOS ประจำค่ายแบรนด์นี้
+                    ไม่พบข้อมูลตามเงื่อนไขการค้นหา
                   </td>
                 </tr>
               ) : (
-                data.map((row) => {
-                  return (
+                filteredChartData
+                  .slice(
+                    (currentPage - 1) * itemsPerPage,
+                    currentPage * itemsPerPage,
+                  )
+                  .map((row) => (
                     <tr
                       key={row.id}
                       className="hover:bg-slate-50 transition-colors"
@@ -1178,8 +1286,7 @@ export default function CompanyExecutiveDashboard() {
                           {row.store_name || "ไม่ระบุชื่อร้าน"}
                         </div>
                         <div className="text-[10px] text-slate-500 font-mono">
-                          {row.account || "General Account"}{" "}
-                          {row.store_code ? `(${row.store_code})` : ""}
+                          {row.account || "General Account"}
                         </div>
                       </td>
                       <td className="p-4">
@@ -1198,56 +1305,11 @@ export default function CompanyExecutiveDashboard() {
                       <td className="p-4 text-slate-700">
                         {row.category || "-"}
                       </td>
-                      <td className="p-4 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center gap-2">
-                          {row.price_tag_image ? (
-                            <a
-                              href={row.price_tag_image}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="w-7 h-7 rounded border border-slate-300 overflow-hidden block"
-                            >
-                              <Image
-                                src={row.price_tag_image}
-                                alt="Price"
-                                width={28}
-                                height={28}
-                                className="object-cover w-full h-full"
-                                unoptimized
-                              />
-                            </a>
-                          ) : (
-                            <div className="text-slate-400">
-                              <ImageIcon size={14} />
-                            </div>
-                          )}
-                          {row.shelf_image ? (
-                            <a
-                              href={row.shelf_image}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="w-7 h-7 rounded border border-slate-300 overflow-hidden block"
-                            >
-                              <Image
-                                src={row.shelf_image}
-                                alt="Shelf"
-                                width={28}
-                                height={28}
-                                className="object-cover w-full h-full"
-                                unoptimized
-                              />
-                            </a>
-                          ) : (
-                            <div className="text-slate-400">
-                              <ImageIcon size={14} />
-                            </div>
-                          )}
-                        </div>
-                      </td>
+                      <td className="p-4 text-center">Images</td>
                       <td className="p-4 text-rose-600 font-medium">
-                        {row.oos_reason || "ไม่ระบุเหตุผล"}
+                        {row.oos_reason || "-"}
                       </td>
-                      <td className="p-4 text-center whitespace-nowrap">
+                      <td className="p-4 text-center">
                         <span
                           className={`px-2 py-0.5 rounded text-[10px] font-semibold ${row.action_plan ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}
                         >
@@ -1263,7 +1325,7 @@ export default function CompanyExecutiveDashboard() {
                                 ? tempActions[row.id]
                                 : row.action_plan || ""
                             }
-                            placeholder="พิมพ์คำสั่งการที่นี่..."
+                            placeholder="พิมพ์คำสั่งการ..."
                             onChange={(e) =>
                               setTempActions({
                                 ...tempActions,
@@ -1298,14 +1360,13 @@ export default function CompanyExecutiveDashboard() {
                         </div>
                       </td>
                     </tr>
-                  );
-                })
+                  ))
               )}
             </tbody>
           </table>
         </div>
 
-        <div className="p-4 bg-[#1e293b] border-t border-slate-800 flex justify-between items-center text-xs mt-4 rounded-b-xl">
+        <div className="p-4 bg-[#1e293b] border-t border-slate-800 flex justify-between items-center text-xs mt-4 rounded-b-xl text-white">
           <button
             type="button"
             disabled={currentPage === 1 || loading}
@@ -1317,8 +1378,8 @@ export default function CompanyExecutiveDashboard() {
           <span className="font-bold text-slate-400">
             หน้า{" "}
             <span className="text-emerald-400 font-mono">{currentPage}</span> /{" "}
-            {Math.ceil(totalCount / itemsPerPage) || 1} (ทั้งหมด {totalCount}{" "}
-            แถว)
+            {Math.ceil(filteredChartData.length / itemsPerPage) || 1}
+            (ทั้งหมด {filteredChartData.length} แถว)
           </span>
           <button
             type="button"
