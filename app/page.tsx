@@ -156,25 +156,11 @@ export default function CustomerDashboardHubPage() {
               </div>
               <i className="fa-solid fa-chevron-right text-[9px] text-slate-300 group-hover:translate-x-0.5 transition-all"></i>
             </div>
-            {/* 🛡️ ปุ่มใหม่: Auditor War Room (ส่ง Token ไปให้บ้าน Auditor ด้วย) */}
+            {/* 🛡️ ปุ่ม Auditor War Room (ฉบับสมบูรณ์) */}
             <div
-<<<<<<< HEAD
-  onClick={() => {
-    const token = localStorage.getItem("customer_username") || "";
-    // ส่ง role ไปด้วยเลยครับ
-    window.location.href = `https://riverpro-oos-warroom-dwx4.vercel.app/auditor?token=${token}&role=auditor`;
-  }}
-  className="bg-white border border-slate-200 hover:border-blue-500 rounded-xl p-4 shadow-xs transition-all cursor-pointer flex items-center justify-between group"
->
-=======
-              onClick={() => {
-                const token = localStorage.getItem("customer_username") || "";
-                // ส่ง role ไปด้วยเลยครับ
-                window.location.href = `https://riverpro-oos-warroom-dwx4.vercel.app/auditor?token=${token}&role=auditor`;
-              }}
-              className="bg-white border border-slate-200 hover:border-blue-500 rounded-xl p-4 shadow-xs transition-all cursor-pointer flex items-center justify-between group"
+              onClick={() => router.push("/auditor")}
+              className="bg-white border border-slate-200 hover:border-slate-400 rounded-xl p-4 shadow-xs transition-all cursor-pointer flex items-center justify-between group"
             >
->>>>>>> 6c49b7a (Initial commit: Executive War Room Dashboard)
               <div className="flex items-center space-x-3.5">
                 <div className="w-9 h-9 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-xs group-hover:scale-105 transition-all">
                   <i className="fa-solid fa-shield-halved text-xs"></i>
