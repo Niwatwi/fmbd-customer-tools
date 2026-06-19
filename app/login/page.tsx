@@ -22,13 +22,14 @@ export default function CustomerLoginPage() {
 
     setLoading(true);
     try {
-      // 🔍 ค้นหาประวัติบัญชีตรวจสอบผ่านฟิลด์ email และดักรหัสผ่านตรงตัว
+      // 🔍 ค้นหาประวัติบัญชีตรวจสอบผ่านฟิลด์ email โดยไม่สนใจตัวพิมพ์เล็กพิมพ์ใหญ่ (Case-Insensitive)
+      // ⚡ ปรับปรุงจุดนี้: เปลี่ยนจาก .eq() เป็น .ilike() สำหรับฟิลด์ email ครับพี่ยอด
       const { data: profile, error } = await supabase
         .from("user_profiles")
         .select(
           "username, display_name, company_tag, password_text, email, is_active",
         )
-        .eq("email", email.trim())
+        .ilike("email", email.trim()) // 👈 ใช้ ilike ตรวจสอบอีเมลแบบไม่สนตัวพิมพ์เล็ก-ใหญ่
         .eq("password_text", password.trim())
         .maybeSingle();
 
@@ -85,14 +86,12 @@ export default function CustomerLoginPage() {
       });
 
       // 🚀 3. จัดการกระจายส่งตัวไปหน้าควบคุมงานตามระดับสิทธิ์จริงผ่านระเบียบ Routing (บังคับล้างแคช)
-      // 🚀 3. จัดการกระจายส่งตัวตามระดับสิทธิ์ (ถ้าเป็นพนักงานให้ดีดข้ามค่ายไป fmbd-tools)
       if (derivedRole === "admin") {
         window.location.href = "/admin";
       } else if (derivedRole === "auditor") {
         // 🎯 ดีดส่งตัวพนักงานภาคสนามข้ามค่ายไปหาโดเมนหลักของฝั่ง fmbd-tools ทันทีครับพี่นิวาส!
         window.location.href =
           "https://fmbd-tools-niwat-wis-projects.vercel.app";
-        // (หรือเปลี่ยนเป็น URL โดเมนหลักสั้นๆ ของโปรเจกต์ fmbd-tools ได้เลยครับ)
       } else {
         window.location.href = "/"; // ลูกค้าเข้าหน้า Hub หลักตามปกติ
       }
@@ -156,7 +155,7 @@ export default function CustomerLoginPage() {
               📧 Email Address / อีเมลผู้ใช้งาน
             </label>
             <input
-              type="email"
+              type="text" // ⚡ เปลี่ยนเป็น text เผื่อกรณี autocomplete เติมอีเมลในบางเบราว์เซอร์
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
