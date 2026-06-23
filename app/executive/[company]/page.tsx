@@ -517,19 +517,20 @@ export default function CompanyExecutiveDashboard() {
   }, [data]);
 
   useEffect(() => {
-    if (!isMounted || uniqueCompanyStores.length === 0) return;
+    if (!isMounted || !config.dbCompany) return;
     async function fetchActiveComments() {
       const { data: comments, error } = await supabase
         .from("oos_comments")
         .select("*")
-        .in("store_name", uniqueCompanyStores)
+        .eq("company", config.dbCompany) // 🟢 เปลี่ยนจาก .in มาเป็น .eq ดึงตรงรายบริษัทเลยครับ
         .order("id", { ascending: false })
         .limit(10);
       if (!error && comments)
         setCustomerComments(comments as CustomerCommentRow[]);
     }
     fetchActiveComments();
-  }, [uniqueCompanyStores, isMounted, commentRefreshTrigger, refreshTrigger]);
+    // 🟢 เปลี่ยน dependency ด้านล่างให้ผูกกับ config.dbCompany แทน
+  }, [config.dbCompany, isMounted, commentRefreshTrigger, refreshTrigger]);
 
   const handleSendComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -545,6 +546,7 @@ export default function CompanyExecutiveDashboard() {
           customer_name: customerDisplayName,
           comment_text: newCommentText.trim(),
           status: "pending",
+          company: config.dbCompany,
         },
       ]);
       if (error) throw error;
