@@ -83,7 +83,6 @@ interface CustomerCommentRow {
   status: "pending" | "auditor_replied" | "admin_intervened";
 }
 
-// 🟢 โครงสร้างผูกโลโก้และชื่อกลุ่มผู้ใช้งานคู่ค้าหลักให้สอดรับตามภาพ d425c5 และ d425eb
 const COMPANY_CONFIG: Record<
   string,
   { name: string; fullName: string; dbCompany: string; logo: string }
@@ -150,16 +149,12 @@ export default function CompanyExecutiveDashboard() {
   const params = useParams();
   const router = useRouter();
 
-  // 🟢 ตั้งค่าเริ่มต้นเผื่อระบบหน่วงเวลาโหลด Client-side
   const [companyKey, setCompanyKey] = useState("rvp");
 
   const config = useMemo(() => {
-    // ดึงค่าออกมา หรือ default เป็น 'rvp'
     const key =
       companyKey && typeof companyKey === "string" ? companyKey : "rvp";
     const safeKey = key.toLowerCase();
-
-    // กันเหนียว: ถ้าหา key ไม่เจอใน Config ให้ส่ง RVP กลับไปทันที
     return COMPANY_CONFIG[safeKey] || COMPANY_CONFIG.rvp;
   }, [companyKey]);
 
@@ -211,12 +206,9 @@ export default function CompanyExecutiveDashboard() {
       return;
     }
 
-    // ปลอดภัยกว่าเดิม: เช็คให้ชัวร์ว่าเป็น string หรือ array ก่อนใช้งาน
     const rawCompany = params?.company;
-
     if (rawCompany) {
       const companyStr = Array.isArray(rawCompany) ? rawCompany[0] : rawCompany;
-      console.log("ตั้งค่าบริษัทจาก URL:", companyStr);
       setCompanyKey(companyStr.toLowerCase());
     } else {
       const stored = localStorage.getItem("company") || "rvp";
@@ -251,7 +243,6 @@ export default function CompanyExecutiveDashboard() {
   useEffect(() => {
     let active = true;
     async function fetchChartSummary() {
-      // ดักกรณีที่สัญญายังโหลดไม่เสร็จสิ้น
       if (!config.dbCompany) return;
 
       const { data: summary, error } = await supabase
@@ -460,6 +451,7 @@ export default function CompanyExecutiveDashboard() {
     };
   }, [config.dbCompany, filters, globalSearch, currentPage, refreshTrigger]);
 
+  // 🟢 จุดแก้ไขหลัก: แก้ไขโครงสร้าง Cascading Filter ทั้ง Brand และ Category ให้สัมพันธ์กัน
   const dropdownOptions = useMemo(() => {
     const dates = new Set<string>();
     const months = new Set<string>();
@@ -482,9 +474,25 @@ export default function CompanyExecutiveDashboard() {
       if (item.area) areas.add(item.area);
       if (item.account) accounts.add(item.account);
       if (item.province) provinces.add(item.province);
-      if (item.brand) brands.add(item.brand);
-      if (item.category) categories.add(item.category);
       if (item.oos_reason) reasons.add(sanitizeOosReason(item.oos_reason));
+
+      // 1. จัดการตัวเลือกในกล่อง Brand (ยึดตาม Category ที่เลือก)
+      if (filters.category) {
+        if (item.category === filters.category && item.brand) {
+          brands.add(item.brand);
+        }
+      } else {
+        if (item.brand) brands.add(item.brand);
+      }
+
+      // 2. จัดการตัวเลือกในกล่อง Category (ยึดตาม Brand ที่เลือก)
+      if (filters.brand) {
+        if (item.brand === filters.brand && item.category) {
+          categories.add(item.category);
+        }
+      } else {
+        if (item.category) categories.add(item.category);
+      }
     });
 
     return {
@@ -498,7 +506,7 @@ export default function CompanyExecutiveDashboard() {
       brands: Array.from(brands).sort(),
       categories: Array.from(categories).sort(),
     };
-  }, [chartDataSrc]);
+  }, [chartDataSrc, filters.brand, filters.category]);
 
   const uniqueCompanyStores = useMemo(() => {
     const stores = new Set<string>();
@@ -741,7 +749,6 @@ export default function CompanyExecutiveDashboard() {
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased pb-12">
       <header className="sticky top-0 z-50 bg-[#1e3a8a] text-white p-4 shadow-md flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
         <div className="flex items-center gap-3">
-          {/* 🟢 แสดงโลโก้ของลูกค้าคู่ค้ารายจริง (Loxley / Kewpie) โดยอิงตามเซสชันการเข้าสู่ระบบหมดสิทธิ์ค้าง RVP */}
           <div className="relative w-10 h-10 bg-white rounded-lg p-1 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
             <img
               src={config.logo}
@@ -995,6 +1002,8 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
+        {/* 🟢 ตัวเลือก Brand: เมื่อปรับค่า จะสั่ง Reset Category อัตโนมัติ */}
         <select
           className="border border-blue-400 p-2 rounded text-xs font-bold bg-blue-50 text-blue-900"
           value={filters.brand}
@@ -1010,12 +1019,14 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
+        {/* 🟢 ตัวเลือก Category: เมื่อปรับค่า จะสั่ง Reset Brand อัตโนมัติ */}
         <select
           className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
           value={filters.category}
           onChange={(e) => {
             setCurrentPage(1);
-            setFilters({ ...filters, category: e.target.value });
+            setFilters({ ...filters, category: e.target.value, brand: "" });
           }}
         >
           <option value="">Category (All)</option>
@@ -1025,6 +1036,7 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
+
         <select
           className="border border-gray-300 p-2 rounded text-xs bg-gray-50 md:col-span-2 lg:col-span-3"
           value={filters.status}
