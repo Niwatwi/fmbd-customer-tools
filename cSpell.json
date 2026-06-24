@@ -1,0 +1,23 @@
+{
+    "version": "0.2",
+    "language": "en",
+    "words": [
+        "supabase",
+        "sweetalert",
+        "Swal",
+        "Riverpro",
+        "loxley",
+        "LOXLEY",
+        "Loxley",
+        "warroom",
+        "barcodes",
+        "FMBD",
+        "Niwat",
+        "Wiyasing",
+        "niwatwi",
+        "Intertrade"
+    ],
+    "ignoreRegExpList": [
+        "/[\\u0E00-\\u0E7F]+/g"
+    ]
+}

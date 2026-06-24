@@ -1048,8 +1048,10 @@ export default function CompanyExecutiveDashboard() {
           }}
         >
           <option value="">Status (All)</option>
-          <option value="pending">❌ Pending (รอดำเนินการ)</option>
-          <option value="resolved">✅ Verified (สั่งการแล้ว)</option>
+          {/* 🟢 เปลี่ยน value จาก "pending" เป็น "Pending" */}
+          <option value="Pending">❌ Pending (รอดำเนินการ)</option>
+          {/* 🟢 เปลี่ยน value จาก "resolved" เป็น "Verified" */}
+          <option value="Verified">✅ Verified (สั่งการแล้ว)</option>
         </select>
       </div>
 
