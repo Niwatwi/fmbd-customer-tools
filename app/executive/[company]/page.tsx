@@ -70,6 +70,7 @@ interface DashboardItem {
   province: string;
   region: string;
   descriptions: string | null;
+  status: string;
 }
 
 interface CustomerCommentRow {
@@ -317,14 +318,9 @@ export default function CompanyExecutiveDashboard() {
           query = query.eq("oos_items.oos_reason", filters.reason);
         }
       }
-      if (filters.status === "resolved")
-        query = query
-          .not("oos_items.action_plan", "is", null)
-          .neq("oos_items.action_plan", "");
-      if (filters.status === "pending")
-        query = query.or("action_plan.is.null,action_plan.eq.", {
-          foreignTable: "oos_items",
-        });
+      if (filters.status) {
+        query = query.eq("oos_items.status", filters.status);
+      }
 
       const { count, error } = await query;
       if (active && !error && count !== null) {
@@ -403,10 +399,9 @@ export default function CompanyExecutiveDashboard() {
         }
       }
 
-      if (filters.status === "resolved")
-        query = query.not("action_plan", "is", null).neq("action_plan", "");
-      if (filters.status === "pending")
-        query = query.or("action_plan.is.null,action_plan.eq.");
+      if (filters.status) {
+        query = query.eq("status", filters.status);
+      }
 
       if (globalSearch) {
         query = query.or(
@@ -602,7 +597,7 @@ export default function CompanyExecutiveDashboard() {
 
       if (cleanReason === "ไม่มีสินค้าที่ OOS") return;
 
-      if (item.status === "resolved") initialResolvedCount += amt;
+      if (item.status === "Verified") initialResolvedCount += amt;
       else initialPendingCount += amt;
       if (item.account)
         accountCounts[item.account] = (accountCounts[item.account] || 0) + amt;
@@ -1423,9 +1418,9 @@ export default function CompanyExecutiveDashboard() {
                         <span className="text-slate-400 font-bold">-</span>
                       ) : (
                         <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold ${row.action_plan ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold ${row.status === "Verified" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}
                         >
-                          {row.action_plan ? "Verified" : "Pending"}
+                          {row.status || "Pending"}
                         </span>
                       )}
                     </td>
