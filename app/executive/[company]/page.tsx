@@ -82,6 +82,9 @@ interface CustomerCommentRow {
   auditor_reply: string | null;
   admin_reply: string | null;
   status: "pending" | "auditor_replied" | "admin_intervened";
+  company: string;
+  auditor: string | null;
+  reply_image_url: string | null;
 }
 
 const COMPANY_CONFIG: Record<
@@ -446,7 +449,6 @@ export default function CompanyExecutiveDashboard() {
     };
   }, [config.dbCompany, filters, globalSearch, currentPage, refreshTrigger]);
 
-  // 🟢 จุดแก้ไขหลัก: แก้ไขโครงสร้าง Cascading Filter ทั้ง Brand และ Category ให้สัมพันธ์กัน
   const dropdownOptions = useMemo(() => {
     const dates = new Set<string>();
     const months = new Set<string>();
@@ -471,7 +473,6 @@ export default function CompanyExecutiveDashboard() {
       if (item.province) provinces.add(item.province);
       if (item.oos_reason) reasons.add(sanitizeOosReason(item.oos_reason));
 
-      // 1. จัดการตัวเลือกในกล่อง Brand (ยึดตาม Category ที่เลือก)
       if (filters.category) {
         if (item.category === filters.category && item.brand) {
           brands.add(item.brand);
@@ -480,7 +481,6 @@ export default function CompanyExecutiveDashboard() {
         if (item.brand) brands.add(item.brand);
       }
 
-      // 2. จัดการตัวเลือกในกล่อง Category (ยึดตาม Brand ที่เลือก)
       if (filters.brand) {
         if (item.brand === filters.brand && item.category) {
           categories.add(item.category);
@@ -517,24 +517,33 @@ export default function CompanyExecutiveDashboard() {
       const { data: comments, error } = await supabase
         .from("oos_comments")
         .select("*")
-        .eq("company", config.dbCompany) // 🟢 เปลี่ยนจาก .in มาเป็น .eq ดึงตรงรายบริษัทเลยครับ
+        .eq("company", config.dbCompany)
         .order("id", { ascending: false })
         .limit(10);
       if (!error && comments)
         setCustomerComments(comments as CustomerCommentRow[]);
     }
     fetchActiveComments();
-    // 🟢 เปลี่ยน dependency ด้านล่างให้ผูกกับ config.dbCompany แทน
   }, [config.dbCompany, isMounted, commentRefreshTrigger, refreshTrigger]);
 
   const handleSendComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCommentStore || !newCommentText.trim()) return;
     setSubmittingComment(true);
+
     const customerDisplayName =
       localStorage.getItem("customer_display_name") ||
       `Executive (${config.name})`;
+
     try {
+      const { data: latestVisit } = await supabase
+        .from("store_visits")
+        .select("auditor")
+        .eq("store_name", selectedCommentStore)
+        .order("date_key", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
       const { error } = await supabase.from("oos_comments").insert([
         {
           store_name: selectedCommentStore,
@@ -542,9 +551,12 @@ export default function CompanyExecutiveDashboard() {
           comment_text: newCommentText.trim(),
           status: "pending",
           company: config.dbCompany,
+          auditor: latestVisit?.auditor || null,
         },
       ]);
+
       if (error) throw error;
+
       Swal.fire({
         icon: "success",
         title: "ส่งสัญญาณเข้า War Room สำเร็จ!",
@@ -1000,7 +1012,6 @@ export default function CompanyExecutiveDashboard() {
           ))}
         </select>
 
-        {/* 🟢 ตัวเลือก Brand: เมื่อปรับค่า จะสั่ง Reset Category อัตโนมัติ */}
         <select
           className="border border-blue-400 p-2 rounded text-xs font-bold bg-blue-50 text-blue-900"
           value={filters.brand}
@@ -1017,7 +1028,6 @@ export default function CompanyExecutiveDashboard() {
           ))}
         </select>
 
-        {/* 🟢 ตัวเลือก Category: เมื่อปรับค่า จะสั่ง Reset Brand อัตโนมัติ */}
         <select
           className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
           value={filters.category}
@@ -1043,9 +1053,7 @@ export default function CompanyExecutiveDashboard() {
           }}
         >
           <option value="">Status (All)</option>
-          {/* 🟢 เปลี่ยน value จาก "pending" เป็น "Pending" */}
           <option value="Pending">❌ Pending (รอดำเนินการ)</option>
-          {/* 🟢 เปลี่ยน value จาก "resolved" เป็น "Verified" */}
           <option value="Verified">✅ Verified (สั่งการแล้ว)</option>
         </select>
       </div>
@@ -1223,6 +1231,7 @@ export default function CompanyExecutiveDashboard() {
                 กระดานติดตามสถานะความคืบหน้า (SLA Tracker)
               </h3>
             </div>
+
             {customerComments.length === 0 ? (
               <div className="text-center py-10 text-[11px] text-gray-400 font-bold border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
                 📭 ยังไม่มีประวัติการแจ้งเคสปัญหาในระบบ
@@ -1252,6 +1261,7 @@ export default function CompanyExecutiveDashboard() {
                     <p className="text-slate-700 bg-white border border-gray-100 p-2 rounded-lg font-medium mb-1.5">
                       {comment.comment_text}
                     </p>
+
                     {comment.auditor_reply && (
                       <p className="text-blue-900 bg-blue-50/50 p-2 rounded-lg font-semibold text-[11px] mb-1">
                         <span className="text-[9px] font-black text-blue-600 block">
@@ -1260,6 +1270,27 @@ export default function CompanyExecutiveDashboard() {
                         {comment.auditor_reply}
                       </p>
                     )}
+
+                    {comment.reply_image_url && (
+                      <div className="mt-2 pl-2 mb-1">
+                        <span className="text-[9px] font-black text-slate-500 block mb-1">
+                          📸 รูปภาพหลักฐานการจัดชั้น/แก้ไข:
+                        </span>
+                        <a
+                          href={comment.reply_image_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="relative w-24 h-24 block border rounded-lg overflow-hidden bg-slate-100 shadow-sm hover:opacity-90"
+                        >
+                          <img
+                            src={comment.reply_image_url}
+                            alt="SLA Proof"
+                            className="w-full h-full object-cover"
+                          />
+                        </a>
+                      </div>
+                    )}
+
                     {comment.admin_reply && (
                       <p className="text-teal-900 bg-teal-50 p-2 rounded-lg font-semibold text-[11px]">
                         <span className="text-[9px] font-black text-teal-600 block">
