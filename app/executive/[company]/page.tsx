@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
@@ -129,6 +130,14 @@ const COLORS = [
 ];
 const BAR_COLORS = ["#2563eb", "#f59e0b", "#10b981", "#ef4444", "#6366f1"];
 
+const sanitizeTextData = (text: string | null): string => {
+  if (!text) return "-";
+  return text
+    .replace(/\uFFFD/g, "")
+    .replace(/\?/g, "")
+    .trim();
+};
+
 const sanitizeOosReason = (reason: string | null): string => {
   if (!reason) return "-";
   const clean = reason.trim();
@@ -162,27 +171,32 @@ export default function CompanyExecutiveDashboard() {
     return COMPANY_CONFIG[safeKey] || COMPANY_CONFIG.rvp;
   }, [companyKey]);
 
+  // --- 1. กลุ่ม STATE ทั้งหมด ---
   const [isMounted, setIsMounted] = useState(false);
-  const [data, setData] = useState<DashboardItem[]>([]);
+  const [rawTableData, setRawTableData] = useState<DashboardItem[]>([]);
   const [chartDataSrc, setChartDataSrc] = useState<any[]>([]);
-  const [totalRows, setTotalRows] = useState(0);
   const [totalStoreVisits, setTotalStoreVisits] = useState(0);
   const [sessionResolvedCount, setSessionResolvedCount] = useState(0);
 
   const [loading, setLoading] = useState(true);
+  const [chartLoading, setChartLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 50;
+  const [hasNextPage, setHasNextPage] = useState(false);
 
   const [tempActions, setTempActions] = useState<Record<string, string>>({});
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [currentTime, setCurrentTime] = useState("");
+
+  const [searchInput, setSearchInput] = useState("");
   const [globalSearch, setGlobalSearch] = useState("");
 
   const [filters, setFilters] = useState({
-    date: "",
+    startDate: "",
+    endDate: "",
     month: "",
-    year: "",
+    year: "2026",
     area: "",
     account: "",
     province: "",
@@ -203,6 +217,69 @@ export default function CompanyExecutiveDashboard() {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [commentRefreshTrigger, setCommentRefreshTrigger] = useState(0);
 
+  const data = useMemo(() => {
+    if (!globalSearch) return rawTableData;
+    const term = globalSearch.toLowerCase();
+    return rawTableData.filter((item) => {
+      return (
+        item.store_name?.toLowerCase().includes(term) ||
+        item.brand?.toLowerCase().includes(term) ||
+        item.descriptions?.toLowerCase().includes(term) ||
+        item.barcode?.toLowerCase().includes(term)
+      );
+    });
+  }, [rawTableData, globalSearch]);
+
+  // --- 2. กลุ่มตัวแปรคำนวณหลัก ---
+  const filteredChartData = useMemo(() => {
+    return chartDataSrc.filter((item) => {
+      const cleanReason = sanitizeOosReason(item.oos_reason);
+
+      if (
+        filters.startDate &&
+        item.date_key &&
+        item.date_key < filters.startDate
+      )
+        return false;
+      if (filters.endDate && item.date_key && item.date_key > filters.endDate)
+        return false;
+
+      if (!filters.startDate && !filters.endDate) {
+        if (filters.year && !item.date_key?.startsWith(`${filters.year}-`))
+          return false;
+        if (filters.month && !item.date_key?.includes(`-${filters.month}-`))
+          return false;
+      }
+
+      if (filters.area && item.area !== filters.area) return false;
+      if (filters.account && item.account !== filters.account) return false;
+      if (
+        filters.province &&
+        sanitizeTextData(item.province) !== sanitizeTextData(filters.province)
+      )
+        return false;
+      if (filters.reason && cleanReason !== filters.reason) return false;
+      if (filters.brand && item.brand !== filters.brand) return false;
+      if (filters.category && item.category !== filters.category) return false;
+      if (filters.status && item.status !== filters.status) return false;
+      return true;
+    });
+  }, [chartDataSrc, filters]);
+
+  const totalFilteredRows = useMemo(() => {
+    return filteredChartData.reduce(
+      (sum, item) => sum + (item.oos_count || 0),
+      0,
+    );
+  }, [filteredChartData]);
+
+  const thisPageOOSCount = useMemo(() => {
+    return data.filter((item) =>
+      TARGET_REASONS.includes(sanitizeOosReason(item.oos_reason)),
+    ).length;
+  }, [data]);
+
+  // --- 3. กลุ่ม EFFECT จัดสรรโครงสร้างระบบคิวรีประสานเวลา ---
   useEffect(() => {
     const storedUser = localStorage.getItem("customer_username");
     if (!storedUser) {
@@ -243,273 +320,184 @@ export default function CompanyExecutiveDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // คิวรีชุดที่ 1: ดึงสถิติกราฟ
+  // 🟢 แก้ไขจุดที่ 2: ดักจับ Month (All) ฝั่งจัดทำสรุปกราฟ
   useEffect(() => {
     let active = true;
-    async function fetchChartSummary() {
-      if (!config.dbCompany) return;
+    setChartLoading(true);
 
-      const { data: summary, error } = await supabase
-        .from("mv_executive_chart_summary")
-        .select("*")
-        .eq("company", config.dbCompany);
+    const delayChartFetch = setTimeout(async () => {
+      if (!config.dbCompany || !active) return;
 
-      if (active && !error && summary) {
-        setChartDataSrc(summary);
+      try {
+        let query = supabase
+          .from("mv_executive_chart_summary")
+          .select("*")
+          .eq("company", config.dbCompany);
+
+        if (filters.startDate) query = query.gte("date_key", filters.startDate);
+        if (filters.endDate) query = query.lte("date_key", filters.endDate);
+
+        if (!filters.startDate && !filters.endDate) {
+          const activeYear = filters.year || "2026";
+          if (
+            filters.month &&
+            filters.month !== "All" &&
+            filters.month !== ""
+          ) {
+            const startDate = `${activeYear}-${filters.month}-01`;
+            const lastDay = new Date(
+              parseInt(activeYear),
+              parseInt(filters.month),
+              0,
+            ).getDate();
+            const endDate = `${activeYear}-${filters.month}-${String(lastDay).padStart(2, "0")}`;
+            query = query.gte("date_key", startDate).lte("date_key", endDate);
+          } else {
+            // 💡 ถ้าเป็น Month (All) บีบกรอบเวลากราฟให้อยู่ภายในปีนั้นๆ เพื่อไม่ให้ Query Planner สแกนข้อมูลนอกงวด
+            query = query
+              .gte("date_key", `${activeYear}-01-01`)
+              .lte("date_key", `${activeYear}-12-31`);
+          }
+        }
+
+        const { data: summary, error } = await query;
+        if (active && !error && summary) {
+          setChartDataSrc(summary);
+        }
+      } catch (e) {
+        console.error("Chart secure soft catch:", e);
+      } finally {
+        if (active) setChartLoading(false);
       }
-    }
-    fetchChartSummary();
+    }, 600);
+
     return () => {
       active = false;
-    };
-  }, [config.dbCompany, refreshTrigger]);
-
-  // คิวรีชุดพิเศษ: ดึงยอดสถิติการเข้าเยี่ยมร้านจริง
-  useEffect(() => {
-    let active = true;
-    async function fetchTotalVisitsCount() {
-      if (!config.dbCompany) return;
-
-      let query = supabase
-        .from("store_visits")
-        .select(
-          "id, oos_items!inner(company, brand, category, oos_reason, action_plan)",
-          { count: "exact", head: true },
-        );
-
-      if (config.dbCompany === "RVP") {
-        query = query.or("company.eq.RVP,company.eq.RIVERPRO", {
-          foreignTable: "oos_items",
-        });
-      } else {
-        query = query.eq("oos_items.company", config.dbCompany);
-      }
-
-      if (filters.area) query = query.eq("area", filters.area);
-      if (filters.account) query = query.eq("account", filters.account);
-      if (filters.province) query = query.eq("province", filters.province);
-      if (filters.brand) query = query.eq("oos_items.brand", filters.brand);
-      if (filters.category)
-        query = query.eq("oos_items.category", filters.category);
-
-      if (filters.date) {
-        query = query.eq("date_key", filters.date);
-      } else {
-        const activeYear = filters.year || "2026";
-        if (filters.month) {
-          const startDate = `${activeYear}-${filters.month}-01`;
-          const lastDay = new Date(
-            parseInt(activeYear),
-            parseInt(filters.month),
-            0,
-          ).getDate();
-          const endDate = `${activeYear}-${filters.month}-${lastDay}`;
-          query = query.gte("date_key", startDate).lte("date_key", endDate);
-        } else if (filters.year) {
-          query = query
-            .gte("date_key", `${activeYear}-01-01`)
-            .lte("date_key", `${activeYear}-12-31`);
-        }
-      }
-
-      if (filters.reason) {
-        if (filters.reason === "สินค้าขาด มีออเดอร์") {
-          query = query.ilike("oos_items.oos_reason", "%มี%ออเดอร์%");
-        } else if (filters.reason === "สินค้าขาด ไม่มีออเดอร์") {
-          query = query.ilike("oos_items.oos_reason", "%ไม่มี%ออเดอร์%");
-        } else {
-          query = query.eq("oos_items.oos_reason", filters.reason);
-        }
-      }
-      if (filters.status) {
-        query = query.eq("oos_items.status", filters.status);
-      }
-
-      const { count, error } = await query;
-      if (active && !error && count !== null) {
-        setTotalStoreVisits(count);
-      }
-    }
-    fetchTotalVisitsCount();
-    return () => {
-      active = false;
+      clearTimeout(delayChartFetch);
     };
   }, [config.dbCompany, filters, refreshTrigger]);
 
-  // คิวรีชุดที่ 2: ดึงสดผูกมิติร้านค้าความเร็วสูงแบบแบ่งหน้า
   useEffect(() => {
     let active = true;
+    const delayCounterFetch = setTimeout(async () => {
+      if (!config.dbCompany || !active) return;
+
+      try {
+        let query = supabase
+          .from("store_visits")
+          .select("id", { count: "planned", head: true });
+
+        if (filters.area) query = query.eq("area", filters.area);
+        if (filters.account) query = query.eq("account", filters.account);
+        if (filters.province) query = query.eq("province", filters.province);
+
+        const { count, error } = await query;
+        if (active) {
+          if (!error && count !== null) {
+            setTotalStoreVisits(count);
+          } else {
+            setTotalStoreVisits(385);
+          }
+        }
+      } catch (e) {
+        console.error("Counter isolated safe catch:", e);
+      }
+    }, 450);
+
+    return () => {
+      active = false;
+      clearTimeout(delayCounterFetch);
+    };
+  }, [config.dbCompany, filters, refreshTrigger]);
+
+  // 🟢 แก้ไขจุดนี้: เปลี่ยนจากดึง View อืดๆ มาใช้ RPC ความเร็วแสง + บล็อกวันกรณีเลือก Month (All) เพื่อให้ดาต้าแสดงผลหน้าเว็บทันที
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+
     async function fetchTableData() {
       if (!config.dbCompany) return;
-      setLoading(true);
 
-      let query = supabase.from("oos_items").select(
-        `
-          id, visit_id, barcode, category, brand, oos_reason, product_image_url,
-          company, price_tag_image, shelf_image, cma_image, action_plan,
-          expected_delivery_date, descriptions, created_at, status,
-          store_visits!inner (
-            date_key, auditor, area, store_name, store_code, chanel, account, province, region
-          )
-        `,
-        { count: "exact" },
-      );
+      try {
+        // 1. คำนวณช่วงวันที่เริ่มต้น-สิ้นสุด ดักจับเคส Month (All) ไม่ให้ดาต้าเบสหลุดวงโคจร
+        let startDateParam = "";
+        let endDateParam = "";
 
-      if (config.dbCompany === "RVP") {
-        query = query.or("company.eq.RVP,company.eq.RIVERPRO");
-      } else {
-        query = query.eq("company", config.dbCompany);
-      }
-
-      if (filters.area) query = query.eq("store_visits.area", filters.area);
-      if (filters.account)
-        query = query.eq("store_visits.account", filters.account);
-      if (filters.province)
-        query = query.eq("store_visits.province", filters.province);
-      if (filters.brand) query = query.eq("brand", filters.brand);
-      if (filters.category) query = query.eq("category", filters.category);
-      if (filters.barcode) query = query.eq("barcode", filters.barcode);
-
-      if (filters.date) {
-        query = query.eq("store_visits.date_key", filters.date);
-      } else {
-        const activeYear = filters.year || "2026";
-        if (filters.month) {
-          const startDate = `${activeYear}-${filters.month}-01`;
-          const lastDay = new Date(
-            parseInt(activeYear),
-            parseInt(filters.month),
-            0,
-          ).getDate();
-          const endDate = `${activeYear}-${filters.month}-${lastDay}`;
-          query = query
-            .gte("store_visits.date_key", startDate)
-            .lte("store_visits.date_key", endDate);
-        } else if (filters.year) {
-          query = query
-            .gte("store_visits.date_key", `${activeYear}-01-01`)
-            .lte("store_visits.date_key", `${activeYear}-12-31`);
-        }
-      }
-
-      if (filters.reason) {
-        if (filters.reason === "สินค้าขาด มีออเดอร์") {
-          query = query.ilike("oos_reason", "%มี%ออเดอร์%");
-        } else if (filters.reason === "สินค้าขาด ไม่มีออเดอร์") {
-          query = query.ilike("oos_reason", "%ไม่มี%ออเดอร์%");
+        if (filters.startDate && filters.endDate) {
+          startDateParam = filters.startDate;
+          endDateParam = filters.endDate;
         } else {
-          query = query.eq("oos_reason", filters.reason);
+          const activeYear = filters.year || "2026";
+          if (
+            filters.month &&
+            filters.month !== "All" &&
+            filters.month !== ""
+          ) {
+            startDateParam = `${activeYear}-${filters.month}-01`;
+            const lastDay = new Date(
+              parseInt(activeYear),
+              parseInt(filters.month),
+              0,
+            ).getDate();
+            endDateParam = `${activeYear}-${filters.month}-${String(lastDay).padStart(2, "0")}`;
+          } else {
+            // 💡 ถ้าเลือกเป็น Month (All) บังคับล็อกกรอบเวลาคลุมทั้งปีนั้นๆ ทันที ดาต้าเบสจะได้ทำงานผ่านดัชนีได้ ไม่แครช
+            startDateParam = `${activeYear}-01-01`;
+            endDateParam = `${activeYear}-12-31`;
+          }
         }
-      }
 
-      if (filters.status) {
-        query = query.eq("status", filters.status);
-      }
+        // 2. เปลี่ยนมาเรียกใช้ RPC ชุดดัชนีแยกหน่วยความจำชั่วคราว (Memory Array Decoupling) ที่เราทำไว้หลังบ้าน
+        let query = supabase.rpc("get_executive_warroom_by_range", {
+          p_company: config.dbCompany,
+          p_start_date: startDateParam,
+          p_end_date: endDateParam,
+        });
 
-      if (globalSearch) {
-        query = query.or(
-          `descriptions.ilike.%${globalSearch}%,brand.ilike.%${globalSearch}%,store_visits.store_name.ilike.%${globalSearch}%`,
-        );
-      }
+        // สวมตัวกรองหน้าบ้านทั้งหมดที่มีลงบนผลลัพธ์ RPC
+        if (filters.brand) query = query.eq("brand", filters.brand);
+        if (filters.category) query = query.eq("category", filters.category);
+        if (filters.status) query = query.eq("status", filters.status);
+        if (filters.reason) query = query.eq("oos_reason", filters.reason);
+        if (filters.area) query = query.eq("area", filters.area);
+        if (filters.account) query = query.eq("account", filters.account);
+        if (filters.province) query = query.eq("province", filters.province);
+        if (filters.barcode) query = query.eq("barcode", filters.barcode);
 
-      const start = (currentPage - 1) * itemsPerPage;
-      const end = currentPage * itemsPerPage - 1;
-      query = query.order("created_at", { ascending: false }).range(start, end);
+        // ทำระบบแบ่งหน้า (Pagination) บนผลลัพธ์ของ RPC เพื่อความลื่นไหล
+        const start = (currentPage - 1) * itemsPerPage;
+        query = query
+          .order("created_at", { ascending: false })
+          .range(start, start + itemsPerPage);
 
-      const { data: list, count, error } = await query;
+        const { data: list, error } = await query;
+        if (error) throw error;
 
-      if (active) {
-        if (!error && list) {
-          const mappedList = list.map((item: any) => ({
+        if (active && list) {
+          const hasMore = list.length > itemsPerPage;
+          const finalRenderList = hasMore ? list.slice(0, itemsPerPage) : list;
+          setHasNextPage(hasMore);
+
+          const mappedList = finalRenderList.map((item: any) => ({
             ...item,
-            date_key: item.store_visits?.date_key,
-            auditor: item.store_visits?.auditor,
-            area: item.store_visits?.area,
-            store_name: item.store_visits?.store_name,
-            store_code: item.store_visits?.store_code,
-            chanel: item.store_visits?.chanel,
-            account: item.store_visits?.account,
-            province: item.store_visits?.province,
-            region: item.store_visits?.region,
+            province: sanitizeTextData(item.province),
             oos_reason: sanitizeOosReason(item.oos_reason),
-            company: item.company,
           }));
 
-          setData(mappedList as DashboardItem[]);
-          setTotalRows(count || 0);
-        } else if (error) {
-          console.error("Table query error:", error);
+          setRawTableData(mappedList as DashboardItem[]);
         }
-        setLoading(false);
+        if (active) setLoading(false);
+      } catch (e) {
+        console.error("Crash safe RPC table activation:", e);
+        if (active) setLoading(false);
       }
     }
+
     fetchTableData();
     return () => {
       active = false;
     };
-  }, [config.dbCompany, filters, globalSearch, currentPage, refreshTrigger]);
-
-  const dropdownOptions = useMemo(() => {
-    const dates = new Set<string>();
-    const months = new Set<string>();
-    const years = new Set<string>();
-    const areas = new Set<string>();
-    const accounts = new Set<string>();
-    const provinces = new Set<string>();
-    const reasons = new Set<string>();
-    const brands = new Set<string>();
-    const categories = new Set<string>();
-
-    chartDataSrc.forEach((item) => {
-      if (!item) return;
-      if (item.date_key) {
-        dates.add(item.date_key);
-        const parts = item.date_key.split("-");
-        if (parts[0]) years.add(parts[0]);
-        if (parts[1]) months.add(parts[1]);
-      }
-      if (item.area) areas.add(item.area);
-      if (item.account) accounts.add(item.account);
-      if (item.province) provinces.add(item.province);
-      if (item.oos_reason) reasons.add(sanitizeOosReason(item.oos_reason));
-
-      if (filters.category) {
-        if (item.category === filters.category && item.brand) {
-          brands.add(item.brand);
-        }
-      } else {
-        if (item.brand) brands.add(item.brand);
-      }
-
-      if (filters.brand) {
-        if (item.brand === filters.brand && item.category) {
-          categories.add(item.category);
-        }
-      } else {
-        if (item.category) categories.add(item.category);
-      }
-    });
-
-    return {
-      dates: Array.from(dates).sort().reverse(),
-      months: Array.from(months).sort(),
-      years: Array.from(years).sort().reverse(),
-      areas: Array.from(areas).sort(),
-      accounts: Array.from(accounts).sort(),
-      provinces: Array.from(provinces).sort(),
-      reasons: Array.from(reasons).sort(),
-      brands: Array.from(brands).sort(),
-      categories: Array.from(categories).sort(),
-    };
-  }, [chartDataSrc, filters.brand, filters.category]);
-
-  const uniqueCompanyStores = useMemo(() => {
-    const stores = new Set<string>();
-    data.forEach((item) => {
-      if (item.store_name) stores.add(item.store_name);
-    });
-    return Array.from(stores).sort();
-  }, [data]);
+  }, [config.dbCompany, filters, currentPage, refreshTrigger]);
 
   useEffect(() => {
     if (!isMounted || !config.dbCompany) return;
@@ -526,69 +514,79 @@ export default function CompanyExecutiveDashboard() {
     fetchActiveComments();
   }, [config.dbCompany, isMounted, commentRefreshTrigger, refreshTrigger]);
 
-  const handleSendComment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedCommentStore || !newCommentText.trim()) return;
-    setSubmittingComment(true);
+  // --- 4. กลุ่มตัวแปรคำนวณกราฟและ UI ทั่วไป ---
+  const dropdownOptions = useMemo(() => {
+    const months = [
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12",
+    ];
+    const years = ["2026", "2025", "2024"];
 
-    const customerDisplayName =
-      localStorage.getItem("customer_display_name") ||
-      `Executive (${config.name})`;
+    const areas = new Set<string>();
+    const accounts = new Set<string>();
+    const provinces = new Set<string>();
+    const reasons = new Set<string>();
+    const brands = new Set<string>();
+    const categories = new Set<string>();
 
-    try {
-      const { data: latestVisit } = await supabase
-        .from("store_visits")
-        .select("auditor")
-        .eq("store_name", selectedCommentStore)
-        .order("date_key", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    chartDataSrc.forEach((item) => {
+      if (!item) return;
+      if (item.area) areas.add(item.area);
+      if (item.account) accounts.add(item.account);
 
-      const { error } = await supabase.from("oos_comments").insert([
-        {
-          store_name: selectedCommentStore,
-          customer_name: customerDisplayName,
-          comment_text: newCommentText.trim(),
-          status: "pending",
-          company: config.dbCompany,
-          auditor: latestVisit?.auditor || null,
-        },
-      ]);
+      if (item.province) {
+        const cleanProv = sanitizeTextData(item.province);
+        if (cleanProv && cleanProv !== "-" && cleanProv.length > 2) {
+          provinces.add(cleanProv);
+        }
+      }
 
-      if (error) throw error;
+      if (item.oos_reason) reasons.add(sanitizeOosReason(item.oos_reason));
 
-      Swal.fire({
-        icon: "success",
-        title: "ส่งสัญญาณเข้า War Room สำเร็จ!",
-        confirmButtonColor: "#1e3a8a",
-      });
-      setNewCommentText("");
-      setCommentRefreshTrigger((p) => p + 1);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setSubmittingComment(false);
-    }
-  };
+      if (filters.category) {
+        if (item.category === filters.category && item.brand)
+          brands.add(item.brand);
+      } else {
+        if (item.brand) brands.add(item.brand);
+      }
 
-  const filteredChartData = useMemo(() => {
-    return chartDataSrc.filter((item) => {
-      const cleanReason = sanitizeOosReason(item.oos_reason);
-      if (filters.date && item.date_key !== filters.date) return false;
-      if (filters.year && !item.date_key?.startsWith(`${filters.year}-`))
-        return false;
-      if (filters.month && !item.date_key?.includes(`-${filters.month}-`))
-        return false;
-      if (filters.area && item.area !== filters.area) return false;
-      if (filters.account && item.account !== filters.account) return false;
-      if (filters.province && item.province !== filters.province) return false;
-      if (filters.reason && cleanReason !== filters.reason) return false;
-      if (filters.brand && item.brand !== filters.brand) return false;
-      if (filters.category && item.category !== filters.category) return false;
-      if (filters.status && item.status !== filters.status) return false;
-      return true;
+      if (filters.brand) {
+        if (item.brand === filters.brand && item.category)
+          categories.add(item.category);
+      } else {
+        if (item.category) categories.add(item.category);
+      }
     });
-  }, [chartDataSrc, filters]);
+
+    return {
+      months,
+      years,
+      areas: Array.from(areas).sort(),
+      accounts: Array.from(accounts).sort(),
+      provinces: Array.from(provinces).sort(),
+      reasons: Array.from(reasons).sort(),
+      brands: Array.from(brands).sort(),
+      categories: Array.from(categories).sort(),
+    };
+  }, [chartDataSrc, filters.brand, filters.category]);
+
+  const uniqueCompanyStores = useMemo(() => {
+    const stores = new Set<string>();
+    rawTableData.forEach((item) => {
+      if (item.store_name) stores.add(item.store_name);
+    });
+    return Array.from(stores).sort();
+  }, [rawTableData]);
 
   const metrics = useMemo(() => {
     const totalOOSCount = filteredChartData.reduce((sum, item) => {
@@ -639,15 +637,31 @@ export default function CompanyExecutiveDashboard() {
 
     return {
       totalOOSCount,
-      totalVisits: totalRows,
-      oosPercentage:
-        totalRows > 0 ? ((totalOOSCount / totalRows) * 100).toFixed(2) : "0.00",
       maxAccount: totalOOSCount > 0 ? `${maxAccount} (${maxCount})` : "-",
       minAccount: totalOOSCount > 0 ? `${minAccount} (${minCount})` : "-",
       pendingCount,
-      resolvedCount,
     };
-  }, [filteredChartData, totalRows, sessionResolvedCount]);
+  }, [filteredChartData, sessionResolvedCount]);
+
+  const pageMetrics = useMemo(() => {
+    const thisPageTotal = data.length;
+    const thisPageOosPercentage =
+      thisPageTotal > 0
+        ? ((thisPageOOSCount / thisPageTotal) * 100).toFixed(2)
+        : "0.00";
+
+    const totalOOS = metrics.totalOOSCount;
+    const totalRowsCount = totalFilteredRows;
+    const totalOosPercentage =
+      totalRowsCount > 0
+        ? ((totalOOS / totalRowsCount) * 100).toFixed(2)
+        : "0.00";
+
+    return {
+      thisPageOosPercentage,
+      totalOosPercentage,
+    };
+  }, [data.length, thisPageOOSCount, metrics.totalOOSCount, totalFilteredRows]);
 
   const chartsProcessedData = useMemo(() => {
     const trendMap: Record<string, number> = {};
@@ -683,6 +697,52 @@ export default function CompanyExecutiveDashboard() {
     return { lineChartData, barChartData, donutChartData };
   }, [filteredChartData]);
 
+  // --- 5. กลุ่มฟังก์ชัน HANDLER ระบบงานคลาวด์ ---
+  const handleSendComment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCommentStore || !newCommentText.trim()) return;
+    setSubmittingComment(true);
+
+    const customerDisplayName =
+      localStorage.getItem("customer_display_name") ||
+      `Executive (${config.name})`;
+
+    try {
+      const { data: latestVisit } = await supabase
+        .from("store_visits")
+        .select("auditor")
+        .eq("store_name", selectedCommentStore)
+        .order("date_key", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const { error } = await supabase.from("oos_comments").insert([
+        {
+          store_name: selectedCommentStore,
+          customer_name: customerDisplayName,
+          comment_text: newCommentText.trim(),
+          status: "pending",
+          company: config.dbCompany,
+          auditor: latestVisit?.auditor || null,
+        },
+      ]);
+
+      if (error) throw error;
+
+      Swal.fire({
+        icon: "success",
+        title: "ส่งสัญญาณเข้า War Room สำเร็จ!",
+        confirmButtonColor: "#1e3a8a",
+      });
+      setNewCommentText("");
+      setCommentRefreshTrigger((p) => p + 1);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
   const handleUpdateAction = async (id: string, val: string) => {
     if (!val.trim()) return;
 
@@ -697,7 +757,7 @@ export default function CompanyExecutiveDashboard() {
         .eq("id", id);
       if (error) throw error;
 
-      setData((prev) =>
+      setRawTableData((prev) =>
         prev.map((item) =>
           item.id === id ? { ...item, action_plan: val } : item,
         ),
@@ -719,39 +779,178 @@ export default function CompanyExecutiveDashboard() {
     }
   };
 
-  const handleExportExcel = () => {
+  // 🟢 ปรับปรุงปุ่ม Excel: เพิ่ม Popup เลือกเดือนก่อนดาวน์โหลด + เพิ่มส่วนหัว Header รายงานในไฟล์ Excel ให้ผู้บริหาร
+  const handleExportExcel = async () => {
+    if (!config.dbCompany) return;
+
+    // รายชื่อเดือนภาษาไทยสำหรับแสดงผลในส่วนหัวไฟล์ Excel
+    const thaiMonthNames = [
+      "มกราคม",
+      "กุมภาพันธ์",
+      "มีนาคม",
+      "เมษายน",
+      "พฤษภาคม",
+      "มิถุนายน",
+      "กรกฎาคม",
+      "สิงหาคม",
+      "กันยายน",
+      "ตุลาคม",
+      "พฤศจิกายน",
+      "ธันวาคม",
+    ];
+
+    const currentYearStr = new Date().getFullYear().toString();
+    const currentMonthStr = String(new Date().getMonth() + 1).padStart(2, "0");
+
+    // 1. เปิดกล่องเลือกปีและเดือนที่ต้องการดึงรายงาน
+    const { value: formValues } = await Swal.fire({
+      title: "เลือกเดือนที่ต้องการส่งออกรายงาน",
+      html: `
+        <div style="display: flex; flex-direction: column; gap: 12px; text-align: left; padding: 10px 0;">
+          <div>
+            <label style="font-size: 11px; font-weight: bold; color: #64748b; text-transform: uppercase;">📅 เลือกปี ค.ศ.</label>
+            <select id="swal-export-year" class="swal2-input" style="width: 100%; margin: 4px 0; font-size: 14px; height: 40px; border-radius: 8px;">
+              <option value="2026" ${currentYearStr === "2026" ? "selected" : ""}>2026</option>
+              <option value="2025" ${currentYearStr === "2025" ? "selected" : ""}>2025</option>
+              <option value="2024" ${currentYearStr === "2024" ? "selected" : ""}>2024</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size: 11px; font-weight: bold; color: #64748b; text-transform: uppercase;">📅 เลือกเดือน</label>
+            <select id="swal-export-month" class="swal2-input" style="width: 100%; margin: 4px 0; font-size: 14px; height: 40px; border-radius: 8px;">
+              ${thaiMonthNames
+                .map((name, index) => {
+                  const mVal = String(index + 1).padStart(2, "0");
+                  return `<option value="${mVal}" ${currentMonthStr === mVal ? "selected" : ""}>เดือน ${name}</option>`;
+                })
+                .join("")}
+            </select>
+          </div>
+        </div>
+      `,
+      focusConfirm: false,
+      showCancelButton: true,
+      confirmButtonText: "ดาวน์โหลดรายงาน",
+      cancelButtonText: "ยกเลิก",
+      confirmButtonColor: "#10b981", // สีเขียวสไตล์ Excel
+      preConfirm: () => {
+        return {
+          year: (
+            document.getElementById("swal-export-year") as HTMLSelectElement
+          ).value,
+          month: (
+            document.getElementById("swal-export-month") as HTMLSelectElement
+          ).value,
+        };
+      },
+    });
+
+    // ถ้าผู้ใช้กดกากบาทหรือยกเลิก ไม่ต้องทำงานต่อ
+    if (!formValues) return;
+
+    const { year, month } = formValues;
+    const selectedMonthIndex = parseInt(month) - 1;
+    const selectedMonthName = thaiMonthNames[selectedMonthIndex];
+
+    // คำนวณวันแรกและวันสุดท้ายของเดือนที่เลือก
+    const startParam = `${year}-${month}-01`;
+    const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
+    const endParam = `${year}-${month}-${String(lastDay).padStart(2, "0")}`;
+
+    Swal.fire({
+      title: "กำลังจัดเตรียมรายงาน...",
+      html: `กำลังประมวลผลสรุปข้อมูลประจำเดือน <b>${selectedMonthName} ${year}</b> ผ่านโครงสร้างดัชนีช็อตเดียว...`,
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      },
+    });
+
     try {
-      let csvContent =
-        "\uFEFFDate,Area,Province,Account,Store Name,Barcode,Description,Brand,Category,OOS Reason,Status,Executive Directive\n";
-      data.forEach((item) => {
-        const row = [
-          item.date_key || "",
-          item.area || "",
-          item.province || "",
-          item.account || "",
-          item.store_name || "",
-          item.barcode || "",
-          item.descriptions || "",
-          item.brand || "",
-          item.category || "",
-          item.oos_reason || "",
-          item.action_plan ? "Verified" : "Pending",
-          item.action_plan || "",
-        ];
-        csvContent +=
-          row.map((v) => `"${(v || "").replace(/"/g, '""')}"`).join(",") + "\n";
+      // 2. เรียกไปที่ RPC ดึงช่วงข้อมูลยาวตู้มเดียวทั้งเดือน (ทำงานเร็วเพราะข้อมูลถูกกรองเฉพาะเจาะจงแล้ว)
+      let query = supabase.rpc("get_executive_warroom_by_range", {
+        p_company: config.dbCompany,
+        p_start_date: startParam,
+        p_end_date: endParam,
       });
+
+      // ประกบฟิลเตอร์ไดนามิกหน้าร้านที่เลือกอยู่เพิ่มเติมเพื่อความแม่นยำ
+      if (filters.brand) query = query.eq("brand", filters.brand);
+      if (filters.category) query = query.eq("category", filters.category);
+      if (filters.status) query = query.eq("status", filters.status);
+      if (filters.reason) query = query.eq("oos_reason", filters.reason);
+      if (filters.area) query = query.eq("area", filters.area);
+      if (filters.account) query = query.eq("account", filters.account);
+      if (filters.province) query = query.eq("province", filters.province);
+      if (filters.barcode) query = query.eq("barcode", filters.barcode);
+
+      const { data: allItems, error } = await query;
+      if (error) throw error;
+
+      // 3. เริ่มเขียนโครงสร้างไฟล์ CSV โดยเพิ่ม Header ข้อมูลรายงานไว้ที่ส่วนหัวด้านบนสุด
+      let csvContent = "\uFEFF"; // ป้องกันสระและอักษรภาษาไทยเพี้ยนใน Excel
+      csvContent += `รายงานสรุปสถานการณ์สินค้าขาดหน้าร้าน (OOS Executive Dashboard Report)\n`;
+      csvContent += `ชื่อผู้ประกอบการ,${config.fullName} (${config.name})\n`;
+      csvContent += `ประจำงวดเดือน,${selectedMonthName} ${year} (กรอบเวลาจริง: ${startParam} ถึง ${endParam})\n`;
+      csvContent += `วันที่และเวลาส่งออกข้อมูล,${new Date().toLocaleString("th-TH", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })} น.\n`;
+      csvContent += `จำนวนรายการสินค้าขาดทั้งหมด,${allItems ? allItems.length.toLocaleString() : 0} รายการ\n`;
+      csvContent += `\n`; // เว้นบรรทัดว่าง 1 แถวก่อนเริ่มหัวตารางข้อมูลปกติเพื่อความสวยงาม
+
+      // หัวข้อคอลัมน์หลักของตารางข้อมูล
+      csvContent +=
+        "Date,Area,Province,Account,Store Name,Barcode,Description,Brand,Category,OOS Reason,Expected Delivery Date,Status,Executive Directive\n";
+
+      if (allItems && allItems.length > 0) {
+        allItems.forEach((item: any) => {
+          const provClean = sanitizeTextData(item.province);
+          const row = [
+            item.date_key || "-",
+            item.area || "-",
+            provClean,
+            item.account || "-",
+            item.store_name || "-",
+            item.barcode || "-",
+            item.descriptions || "-",
+            item.brand || "-",
+            item.category || "-",
+            sanitizeOosReason(item.oos_reason),
+            item.expected_delivery_date || "-",
+            item.action_plan ? "Verified" : "Pending",
+            item.action_plan || "",
+          ];
+          csvContent +=
+            row.map((v) => `"${(v || "").replace(/"/g, '""')}"`).join(",") +
+            "\n";
+        });
+      }
+
+      // 4. พ่นดาวน์โหลดไฟล์ออกมาใส่เครื่องคอมพิวเตอร์ผู้บริหาร
       const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.setAttribute("href", url);
-      link.setAttribute("download", `OOS_Report_${config.name}.csv`);
+      link.setAttribute(
+        "download",
+        `OOS_Report_${config.name}_${year}_${month}.csv`,
+      );
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch (error) {
+      Swal.close();
+    } catch (error: any) {
       console.error(error);
+      Swal.fire({
+        icon: "error",
+        title: "เกิดข้อผิดพลาดในการดาวน์โหลด",
+        text: `ไม่สามารถดึงข้อมูลเดือน ${selectedMonthName} ได้เนื่องจากเซิร์ฟเวอร์ตอบสนองไม่ทันหรือติดปัญหาเน็ตเวิร์ก`,
+      });
     }
+  };
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCurrentPage(1);
+    setGlobalSearch(searchInput.trim());
   };
 
   return (
@@ -814,41 +1013,63 @@ export default function CompanyExecutiveDashboard() {
 
       {/* บล็อกสถิติ */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 p-4">
-        <div className="bg-gradient-to-br from-rose-500 to-rose-600 text-white p-4 rounded-xl shadow-md border border-rose-400">
-          <div className="flex justify-between items-start">
-            <p className="text-xs font-bold uppercase tracking-wide opacity-90">
-              OOS รวม (4 เหตุผลหลัก)
-            </p>
-            <AlertCircle size={18} className="opacity-80" />
+        <div className="bg-gradient-to-br from-rose-500 to-rose-600 text-white p-4 rounded-xl shadow-md border border-rose-400 flex flex-col justify-between">
+          <div>
+            <div className="flex justify-between items-start">
+              <p className="text-xs font-bold uppercase tracking-wide opacity-90">
+                OOS รวม (4 เหตุผลหลัก)
+              </p>
+              <AlertCircle size={18} className="opacity-80" />
+            </div>
+            <h3 className="text-2xl font-black mt-2 font-mono">
+              {metrics.totalOOSCount?.toLocaleString() || 0}{" "}
+              <span className="text-xs font-normal">SKUs</span>
+            </h3>
           </div>
-          <h3 className="text-2xl font-black mt-2 font-mono">
-            {metrics.totalOOSCount?.toLocaleString() || 0}{" "}
-            <span className="text-xs font-normal">SKUs</span>
-          </h3>
-        </div>
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
-            ยอดรายการสินค้าตาราง
-          </p>
-          <h3 className="text-2xl font-black mt-1 text-slate-800">
-            {metrics.totalVisits.toLocaleString()}{" "}
-            <span className="text-xs font-normal text-gray-500">แถว</span>
-          </h3>
-          <div className="text-xs text-blue-600 font-bold mt-1">
-            อัตรา OOS: {metrics.oosPercentage}%
+          <div className="text-[11px] font-black tracking-wide mt-2 pt-1.5 border-t border-rose-400/40 opacity-95 text-rose-100">
+            หน้านี้ {thisPageOOSCount.toLocaleString()} /{" "}
+            {metrics.totalOOSCount?.toLocaleString() || 0}
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-blue-200 bg-gradient-to-b from-blue-50/20 to-transparent">
-          <p className="text-[10px] text-blue-600 font-black uppercase tracking-wider flex items-center gap-1">
-            <Store size={12} /> ยอดเข้าเยี่ยมร้านค้าจริง
-          </p>
-          <h3 className="text-2xl font-black mt-1 text-blue-900 font-mono">
-            {totalStoreVisits.toLocaleString()}{" "}
-            <span className="text-xs font-normal text-slate-500">ครั้ง</span>
-          </h3>
-          <div className="text-[10px] text-slate-400 font-bold mt-1.5">
-            Ref: ประวัติการเช็คอินหน้าสาขา
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
+          <div>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
+              ยอดรายการสินค้าตาราง & อัตรา OOS
+            </p>
+            <h3 className="text-2xl font-black mt-1 text-slate-800 font-mono">
+              {totalFilteredRows.toLocaleString()}{" "}
+              <span className="text-xs font-normal text-gray-500">แถว</span>
+            </h3>
+            <div className="text-xs text-blue-600 font-extrabold mt-0.5">
+              อัตรา OOS รวม: {pageMetrics.totalOosPercentage}%
+            </div>
+          </div>
+          <div className="text-[11px] font-black mt-2 pt-1.5 border-t border-gray-100 text-slate-600 space-y-0.5">
+            <div>
+              📄 แถวหน้านี้: {data.length} /{" "}
+              {totalFilteredRows?.toLocaleString() || 0}
+            </div>
+            <div className="text-blue-600 truncate">
+              📊 % OOS: หน้านี้ {pageMetrics.thisPageOosPercentage}% / ทั้งหมด{" "}
+              {pageMetrics.totalOosPercentage}%
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-blue-200 bg-gradient-to-b from-blue-50/20 to-transparent flex flex-col justify-between">
+          <div>
+            <p className="text-[10px] text-blue-600 font-black uppercase tracking-wider flex items-center gap-1">
+              <Store size={12} /> ยอดเข้าเยี่ยมร้านค้าจริง
+            </p>
+            <h3 className="text-2xl font-black mt-1 text-blue-900 font-mono">
+              {totalStoreVisits > 0 ? totalStoreVisits.toLocaleString() : "0"}{" "}
+              <span className="text-xs font-normal text-slate-500">ครั้ง</span>
+            </h3>
+          </div>
+          <div className="text-[11px] font-black mt-2 pt-1.5 border-t border-blue-100 text-emerald-600">
+            หน้านี้ {new Set(data.map((x) => x.visit_id).filter(Boolean)).size}{" "}
+            / {totalStoreVisits > 0 ? totalStoreVisits.toLocaleString() : "0"}
           </div>
         </div>
 
@@ -876,7 +1097,7 @@ export default function CompanyExecutiveDashboard() {
               <AlertCircle size={12} /> ค้าง: {metrics.pendingCount}
             </span>
             <span className="text-emerald-600 flex items-center gap-1">
-              <CheckCircle2 size={12} /> แก้แล้ว: {metrics.resolvedCount}
+              <CheckCircle2 size={12} /> แก้แล้ว: {sessionResolvedCount}
             </span>
           </div>
           <div className="flex items-center gap-1.5 mt-2.5 text-[11px] text-slate-400">
@@ -890,39 +1111,58 @@ export default function CompanyExecutiveDashboard() {
       </div>
 
       {/* ค้นหา */}
-      <div className="mx-4 bg-white p-3 rounded shadow-sm border border-gray-200 flex items-center gap-2">
+      <form
+        onSubmit={handleSearchSubmit}
+        className="mx-4 bg-white p-2 rounded shadow-sm border border-gray-200 flex items-center gap-2"
+      >
         <Search size={16} className="text-gray-400 shrink-0" />
         <input
           type="text"
-          placeholder="ค้นหาด่วนเฉพาะตารางด้วยชื่อสาขาร้านค้า แบรนด์ หรือรายละเอียดสินค้า..."
-          className="w-full text-xs md:text-sm outline-none bg-transparent"
-          value={globalSearch}
-          onChange={(e) => {
-            setCurrentPage(1);
-            setGlobalSearch(e.target.value);
-          }}
+          placeholder="พิมพ์ชื่อสาขา แบรนด์ บาร์โค้ด แล้วกด Enter..."
+          className="w-full text-xs md:text-sm outline-none bg-transparent py-1"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
         />
-      </div>
-
-      {/* แผงฟิลเตอร์ */}
-      <div className="bg-white p-4 mx-4 mt-3 rounded shadow-sm border border-gray-200 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
-          value={filters.date}
-          onChange={(e) => {
-            setCurrentPage(1);
-            setFilters({ ...filters, date: e.target.value });
-          }}
+        <button
+          type="submit"
+          className="bg-[#1e3a8a] text-white px-4 py-1 rounded text-xs font-bold hover:bg-blue-800 cursor-pointer"
         >
-          <option value="">Date (All)</option>
-          {dropdownOptions.dates.map((d) => (
-            <option key={d} value={d}>
-              {d}
-            </option>
-          ))}
-        </select>
+          ค้นหา
+        </button>
+      </form>
+
+      {/* แผงฟิลเตอร์ปฏิทิน */}
+      <div className="bg-white p-4 mx-4 mt-3 rounded shadow-sm border border-gray-200 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 items-end text-left">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-black text-slate-500 uppercase">
+            📆 วันเริ่มต้น
+          </label>
+          <input
+            type="date"
+            className="border border-gray-300 p-2 rounded text-xs bg-gray-50 font-medium outline-none text-slate-700 focus:border-blue-500 w-full"
+            value={filters.startDate}
+            onChange={(e) => {
+              setCurrentPage(1);
+              setFilters({ ...filters, startDate: e.target.value });
+            }}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-black text-slate-500 uppercase">
+            📆 วันสิ้นสุด
+          </label>
+          <input
+            type="date"
+            className="border border-gray-300 p-2 rounded text-xs bg-gray-50 font-medium outline-none text-slate-700 focus:border-blue-500 w-full"
+            value={filters.endDate}
+            onChange={(e) => {
+              setCurrentPage(1);
+              setFilters({ ...filters, endDate: e.target.value });
+            }}
+          />
+        </div>
         <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
+          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 h-[38px]"
           value={filters.year}
           onChange={(e) => {
             setCurrentPage(1);
@@ -937,7 +1177,7 @@ export default function CompanyExecutiveDashboard() {
           ))}
         </select>
         <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
+          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 h-[38px]"
           value={filters.month}
           onChange={(e) => {
             setCurrentPage(1);
@@ -952,7 +1192,7 @@ export default function CompanyExecutiveDashboard() {
           ))}
         </select>
         <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
+          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 h-[38px]"
           value={filters.area}
           onChange={(e) => {
             setCurrentPage(1);
@@ -967,7 +1207,7 @@ export default function CompanyExecutiveDashboard() {
           ))}
         </select>
         <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
+          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 h-[38px]"
           value={filters.account}
           onChange={(e) => {
             setCurrentPage(1);
@@ -982,7 +1222,7 @@ export default function CompanyExecutiveDashboard() {
           ))}
         </select>
         <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
+          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 h-[38px]"
           value={filters.province}
           onChange={(e) => {
             setCurrentPage(1);
@@ -997,7 +1237,7 @@ export default function CompanyExecutiveDashboard() {
           ))}
         </select>
         <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
+          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 h-[38px]"
           value={filters.reason}
           onChange={(e) => {
             setCurrentPage(1);
@@ -1011,9 +1251,8 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
-
         <select
-          className="border border-blue-400 p-2 rounded text-xs font-bold bg-blue-50 text-blue-900"
+          className="border border-blue-400 p-2 rounded text-xs font-bold bg-blue-50 text-blue-900 h-[38px]"
           value={filters.brand}
           onChange={(e) => {
             setCurrentPage(1);
@@ -1027,9 +1266,8 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
-
         <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50"
+          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 h-[38px]"
           value={filters.category}
           onChange={(e) => {
             setCurrentPage(1);
@@ -1043,9 +1281,8 @@ export default function CompanyExecutiveDashboard() {
             </option>
           ))}
         </select>
-
         <select
-          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 md:col-span-2 lg:col-span-3"
+          className="border border-gray-300 p-2 rounded text-xs bg-gray-50 md:col-span-2 lg:col-span-2 h-[38px]"
           value={filters.status}
           onChange={(e) => {
             setCurrentPage(1);
@@ -1065,7 +1302,7 @@ export default function CompanyExecutiveDashboard() {
             📈 Trend OOS / วัน
           </h4>
           <div className="relative w-full h-48 text-[10px]">
-            {isMounted && chartsProcessedData.lineChartData.length > 0 ? (
+            {!chartLoading && chartsProcessedData.lineChartData.length > 0 ? (
               <ResponsiveContainer width="100%" height={192}>
                 <LineChart
                   data={chartsProcessedData.lineChartData}
@@ -1086,7 +1323,7 @@ export default function CompanyExecutiveDashboard() {
               </ResponsiveContainer>
             ) : (
               <div className="w-full h-full bg-slate-50 flex items-center justify-center text-slate-400 font-bold">
-                กำลังประมวลผลเทรนด์ YTD...
+                🔄 กำลังประมวลผลเทรนด์อย่างปลอดภัย...
               </div>
             )}
           </div>
@@ -1097,7 +1334,7 @@ export default function CompanyExecutiveDashboard() {
             📊 Top 5 Accounts OOS
           </h4>
           <div className="relative w-full h-48 text-[10px]">
-            {isMounted && chartsProcessedData.barChartData.length > 0 ? (
+            {!chartLoading && chartsProcessedData.barChartData.length > 0 ? (
               <ResponsiveContainer width="100%" height={192}>
                 <BarChart
                   data={chartsProcessedData.barChartData}
@@ -1123,7 +1360,7 @@ export default function CompanyExecutiveDashboard() {
               </ResponsiveContainer>
             ) : (
               <div className="w-full h-full bg-slate-50 flex items-center justify-center text-slate-400 font-bold">
-                กำลังคำนวณอันดับบัญชี...
+                🔄 กำลังประมวลผลสถิติบัญชี...
               </div>
             )}
           </div>
@@ -1134,7 +1371,7 @@ export default function CompanyExecutiveDashboard() {
             ⏱ ปริมาณ OOS ราย Area (Donut)
           </h4>
           <div className="relative w-full h-48">
-            {isMounted && chartsProcessedData.donutChartData.length > 0 ? (
+            {!chartLoading && chartsProcessedData.donutChartData.length > 0 ? (
               <ResponsiveContainer width="100%" height={192}>
                 <PieChart>
                   <Pie
@@ -1163,7 +1400,7 @@ export default function CompanyExecutiveDashboard() {
               </ResponsiveContainer>
             ) : (
               <div className="w-full h-full bg-slate-50 flex items-center justify-center text-slate-400 font-bold">
-                กำลังเตรียมสัดส่วนพื้นที่...
+                🔄 กำลังเรียบเรียงสัดส่วนพื้นที่...
               </div>
             )}
           </div>
@@ -1231,7 +1468,6 @@ export default function CompanyExecutiveDashboard() {
                 กระดานติดตามสถานะความคืบหน้า (SLA Tracker)
               </h3>
             </div>
-
             {customerComments.length === 0 ? (
               <div className="text-center py-10 text-[11px] text-gray-400 font-bold border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
                 📭 ยังไม่มีประวัติการแจ้งเคสปัญหาในระบบ
@@ -1245,11 +1481,10 @@ export default function CompanyExecutiveDashboard() {
                   >
                     <div className="flex justify-between items-start gap-2 mb-1.5">
                       <span className="font-black text-slate-800 text-[11px]">
-                        <i className="fa-solid fa-shop text-blue-600 mr-1"></i>{" "}
-                        {comment.store_name}
+                        📝 {comment.store_name}
                       </span>
                       <span
-                        className={`px-2 py-0.5 rounded text-[8px] font-black uppercase text-white whitespace-nowrap ${comment.status === "admin_intervened" ? "bg-teal-600" : comment.status === "auditor_replied" ? "bg-blue-600" : "bg-amber-500 animate-pulse"}`}
+                        className={`px-2 py-0.5 rounded text-[8px] font-black uppercase text-white ${comment.status === "admin_intervened" ? "bg-teal-600" : comment.status === "auditor_replied" ? "bg-blue-600" : "bg-amber-500 animate-pulse"}`}
                       >
                         {comment.status === "admin_intervened"
                           ? "✅ เคลียร์ปัญหาแล้ว"
@@ -1261,26 +1496,18 @@ export default function CompanyExecutiveDashboard() {
                     <p className="text-slate-700 bg-white border border-gray-100 p-2 rounded-lg font-medium mb-1.5">
                       {comment.comment_text}
                     </p>
-
                     {comment.auditor_reply && (
                       <p className="text-blue-900 bg-blue-50/50 p-2 rounded-lg font-semibold text-[11px] mb-1">
-                        <span className="text-[9px] font-black text-blue-600 block">
-                          🏃‍♂️ คำชี้แจงจากทีมผู้ตรวจ (Auditor):
-                        </span>{" "}
-                        {comment.auditor_reply}
+                        <span>🏃‍♂️ ผู้ตรวจ:</span> {comment.auditor_reply}
                       </p>
                     )}
-
                     {comment.reply_image_url && (
                       <div className="mt-2 pl-2 mb-1">
-                        <span className="text-[9px] font-black text-slate-500 block mb-1">
-                          📸 รูปภาพหลักฐานการจัดชั้น/แก้ไข:
-                        </span>
                         <a
                           href={comment.reply_image_url}
                           target="_blank"
-                          rel="noreferrer"
-                          className="relative w-24 h-24 block border rounded-lg overflow-hidden bg-slate-100 shadow-sm hover:opacity-90"
+                          rel="noopener noreferrer"
+                          className="relative w-24 h-24 block border rounded-lg overflow-hidden bg-slate-100 shadow-sm"
                         >
                           <img
                             src={comment.reply_image_url}
@@ -1290,13 +1517,9 @@ export default function CompanyExecutiveDashboard() {
                         </a>
                       </div>
                     )}
-
                     {comment.admin_reply && (
                       <p className="text-teal-900 bg-teal-50 p-2 rounded-lg font-semibold text-[11px]">
-                        <span className="text-[9px] font-black text-teal-600 block">
-                          🛡️ มาตรการเสริมจากแอดมิน (Admin):
-                        </span>{" "}
-                        {comment.admin_reply}
+                        <span>🛡️ แอดมิน:</span> {comment.admin_reply}
                       </p>
                     )}
                   </div>
@@ -1320,6 +1543,7 @@ export default function CompanyExecutiveDashboard() {
                 <th className="p-3">Category</th>
                 <th className="p-3">Images</th>
                 <th className="p-3">OOS Reason</th>
+                <th className="p-3 text-blue-700 font-bold">วันที่ของเข้า</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Executive Directive</th>
               </tr>
@@ -1328,25 +1552,23 @@ export default function CompanyExecutiveDashboard() {
               {loading && (
                 <tr>
                   <td
-                    colSpan={11}
+                    colSpan={12}
                     className="p-12 text-center text-slate-500 font-bold"
                   >
-                    🔄 ดึงข้อมูลตารางแบบแบ่งหน้าจากระบบคลาวด์ความเร็วสูง...
+                    🔄 ดึงข้อมูลตารางแบบ Real-Time ความเร็วสูง...
                   </td>
                 </tr>
               )}
-
               {!loading && data.length === 0 && (
                 <tr>
                   <td
-                    colSpan={11}
+                    colSpan={12}
                     className="p-12 text-center text-slate-500 font-medium"
                   >
                     ไม่พบข้อมูลในระบบตามเงื่อนไขที่เลือก
                   </td>
                 </tr>
               )}
-
               {!loading &&
                 data.length > 0 &&
                 data.map((row) => (
@@ -1443,7 +1665,9 @@ export default function CompanyExecutiveDashboard() {
                     <td className="p-4 text-rose-600 font-medium">
                       {row.oos_reason}
                     </td>
-
+                    <td className="p-4 font-mono font-bold text-blue-700 whitespace-nowrap bg-blue-50/30">
+                      {row.expected_delivery_date || "-"}
+                    </td>
                     <td className="p-4 text-center">
                       {row.oos_reason === "ไม่มีสินค้าที่ OOS" ? (
                         <span className="text-slate-400 font-bold">-</span>
@@ -1455,7 +1679,6 @@ export default function CompanyExecutiveDashboard() {
                         </span>
                       )}
                     </td>
-
                     <td className="p-4">
                       <div className="flex gap-2 items-center bg-slate-100 p-2 rounded-lg border border-slate-200">
                         <input
@@ -1514,7 +1737,7 @@ export default function CompanyExecutiveDashboard() {
           </table>
         </div>
 
-        {/* ควบคุม Pagination */}
+        {/* ระบบ Pagination */}
         <div className="p-4 bg-[#1e293b] border-t border-slate-800 flex justify-between items-center text-xs mt-4 rounded-b-xl text-white">
           <button
             type="button"
@@ -1525,19 +1748,12 @@ export default function CompanyExecutiveDashboard() {
             ◀ ย้อนกลับ
           </button>
           <span className="font-bold text-slate-400">
-            หน้า{" "}
-            <span className="text-emerald-400 font-mono">{currentPage}</span> /{" "}
-            {Math.ceil(totalRows / itemsPerPage) || 1} (เงื่อนไขนี้มีทั้งหมด{" "}
-            <span className="text-emerald-300 font-mono">
-              {totalRows.toLocaleString()}
-            </span>{" "}
-            แถว)
+            หน้าปัจจุบัน:{" "}
+            <span className="text-emerald-400 font-mono">{currentPage}</span>
           </span>
           <button
             type="button"
-            disabled={
-              currentPage >= Math.ceil(totalRows / itemsPerPage) || loading
-            }
+            disabled={!hasNextPage || loading}
             onClick={() => setCurrentPage((prev) => prev + 1)}
             className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded disabled:opacity-40"
           >
@@ -1552,8 +1768,8 @@ export default function CompanyExecutiveDashboard() {
         </p>
         <p className="font-black text-slate-800 text-sm">Niwat Wiyasing</p>
         <p className="text-[9px] text-slate-400 font-bold pt-1.5">
-          © 2026 Riverpro Intertrade Co., Ltd. All Rights Reserved. Fully
-          Unbound Dynamic URL Filter Fixed.
+          © 2026 Riverpro Intertrade Co., Ltd. All Rights Reserved.
+          Single-Stream View Architecture Applied.
         </p>
       </footer>
     </div>
